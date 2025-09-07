@@ -51,7 +51,7 @@ compose-plus -b "podman compose" up -d
 
 ## How It Works
 
-1. Detect profiles from `CMP_PROFILE`, then optionally override via `--profile`.
+1. Detect profiles from `--profile` options.
 2. Set the environment variable prefix from `COMPOSE_PLUS_PREFIX` (default: `CMP`).
 3. Load dotenv files: `.env`, `.env.local`, `.env.<PROFILE>`, `.env.<PROFILE>.local`.
 4. Detect the compose binary from `CMP_COMPOSE_BIN`, then optionally override via `--bin`.
@@ -73,23 +73,16 @@ Same as the general flow, except step 5 expands to a sequence of commands execut
 
 All environment variables default to the `CMP` prefix. You can change this prefix with `COMPOSE_PLUS_PREFIX`.
 
-### `COMPOSE_PLUS_PREFIX`
-
-- Sets the prefix for all Compose Plus-related environment variables.
-- Default: `CMP`
-- Example: `COMPOSE_PLUS_PREFIX=MyPrefix_` makes variables like `MyPrefix_PROFILE` instead of `CMP_PROFILE`.
-
-### `CMP_DOTENV_PREFIX`
+### `COMPOSE_PLUS_DOTENV_PREFIX`
 
 - Changes the dotenv file prefix used for detection.
 - Default: `.env`
 
-### `CMP_PROFILE`
+### `COMPOSE_PLUS_PREFIX`
 
-- Comma-separated list of profiles; used to load profile-specific dotenv files.
-- If no profile is specified, only `.env` and `.env.local` are considered.
-- Example: `CMP_PROFILE=development,test` loads:
-  - `.env`, `.env.local`, `.env.development`, `.env.development.local`, `.env.test`, `.env.test.local` (if present)
+- Sets the prefix for all Compose Plus-related environment variables.
+- Default: `CMP_`
+- Example: `COMPOSE_PLUS_PREFIX=MyPrefix_` makes variables like `MyPrefix_COMPOSE_BIN` instead of `CMP_COMPOSE_BIN`.
 
 ### `CMP_COMPOSE_BIN`
 
@@ -104,6 +97,7 @@ The environment variable to specify the compose binary to use the `CMP_DETECTED_
 
 ### `CMP_PROJECT_NAME`
 
+- If user has `-p, --project-name` already, this variable will be ignored.
 - If set, passed as `-p, --project-name ${CMP_PROJECT_NAME}` to the compose command.
 - Useful for selecting per-profile project names.
 
@@ -139,7 +133,7 @@ The following files will be used if present:
   - `.env` → `${CMP_DETECTED_COMPOSE_BIN} --env-file .env`
   - `.env.local` → `${CMP_DETECTED_COMPOSE_BIN} --env-file .env --env-file .env.local`
 
-- Profile files (`<PROFILE>` comes from `CMP_PROFILE`):
+- Profile files (`<PROFILE>` comes from `--profile`):
   - `.env.<PROFILE>` → `${CMP_DETECTED_COMPOSE_BIN} --env-file .env.<PROFILE>`
   - `.env.<PROFILE>.local` (if present) → `${CMP_DETECTED_COMPOSE_BIN} --env-file .env.<PROFILE> --env-file .env.<PROFILE>.local`
 

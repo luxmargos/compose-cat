@@ -1,9 +1,10 @@
+import { exec } from 'node:child_process';
 import { defineConfig } from 'tsup';
 
 type BuildMode = 'production' | 'development';
-const buildMode:BuildMode = (process.env.BUILD_MODE || 'development') as BuildMode;
+const buildMode: BuildMode = (process.env.BUILD_MODE || 'development') as BuildMode;
 
-if(buildMode !== 'production' && buildMode !== 'development'){
+if (buildMode !== 'production' && buildMode !== 'development') {
   throw new Error('BUILD_MODE must be "production" or "development"');
 }
 
@@ -21,10 +22,21 @@ export default defineConfig({
   outDir: 'dist',
   minify: isProduction,
   bundle: true,
+  banner: {
+    js: '#!/usr/bin/env node',
+  },
   external: [/.*\.test\.tsx?$/, /.*\.spec\.tsx?$/, /__tests__/, '__mocks__'],
   esbuildOptions(options, context) {
     options.define = {
       'process.env.BUILD_MODE': buildMode,
     };
+  },
+  onSuccess: async () => {
+    if (process.platform !== 'win32') {
+      try {
+        await exec('chmod +x dist/index.js || true');
+        await exec('chmod +x dist/index.mjs || true');
+      } catch (e) {}
+    }
   },
 });

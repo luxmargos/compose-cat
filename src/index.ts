@@ -5,28 +5,27 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseDotenv } from 'dotenv';
 import packageJson from '../package.json' with { type: 'json' };
+import { e } from 'vite-node/dist/index-z0R8hVRu.js';
 
 type StringMap = Record<string, string>;
 
 const PACKAGE_VERSION = packageJson.version;
 
+const defaultBins = ['docker compose', 'podman compose', 'docker-compose', 'podman-compose'];
+
 function getPrefix(): string {
-  return process.env.COMPOSE_PLUS_PREFIX || 'CMP';
+  return process.env.COMPOSE_PLUS_PREFIX || 'CMP_';
+}
+
+function getDotenvPrefix(): string {
+  return process.env.COMPOSE_PLUS_DOTENV_PREFIX || '.env';
 }
 
 function envKey(
-  key:
-    | 'PROFILE'
-    | 'DOTENV_PREFIX'
-    | 'BASE_DIR'
-    | 'DATA_BASE_DIR'
-    | 'INJECT_DIR'
-    | 'STORE_DIR'
-    | 'COMPOSE_BIN'
-    | 'PROJECT_NAME',
+  key: 'BASE_DIR' | 'DATA_BASE_DIR' | 'INJECT_DIR' | 'STORE_DIR' | 'COMPOSE_BIN' | 'PROJECT_NAME',
   prefix = getPrefix(),
 ) {
-  return `${prefix}_${key}`;
+  return `${prefix}${key}`;
 }
 
 function readEnvFile(file: string): StringMap {
@@ -43,10 +42,27 @@ function readEnvFile(file: string): StringMap {
   }
 }
 
-function detectDotenvFilesAndEnv(): { files: string[]; mergedEnv: StringMap } {
-  const prefix = getPrefix();
+function normalizeProfiles(values?: string[] | string): string[] {
+  if (!values) return [];
+  const arr = Array.isArray(values) ? values : [values];
+  const out: string[] = [];
+  for (const v of arr) {
+    if (!v) continue;
+    for (const part of v.split(',')) {
+      const s = part.trim();
+      if (s) out.push(s);
+    }
+  }
+  return out;
+}
+
+function detectDotenvFilesAndEnv(profileFromCli?: string[] | string): {
+  envFiles: string[];
+  mergedEnv: StringMap;
+  profiles: string[];
+} {
   // Start with defaults; allow OS env to change prefix and dotenv prefix.
-  const dotenvPrefix = process.env[envKey('DOTENV_PREFIX', prefix)] || '.env';
+  const dotenvPrefix = getDotenvPrefix();
 
   const baseFiles = [
     path.resolve(process.cwd(), `${dotenvPrefix}`),
@@ -60,12 +76,12 @@ function detectDotenvFilesAndEnv(): { files: string[]; mergedEnv: StringMap } {
     Object.assign(baseMerged, readEnvFile(f));
   }
 
-  const profileRaw =
-    process.env[envKey('PROFILE', prefix)] || baseMerged[envKey('PROFILE', prefix)] || '';
-  const profiles = profileRaw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Determine profiles: CLI overrides env/dotenv
+  let profiles: string[] = [];
+  const cliProfiles = normalizeProfiles(profileFromCli);
+  if (cliProfiles.length > 0) {
+    profiles = cliProfiles;
+  }
 
   const profileFiles: string[] = [];
   for (const p of profiles) {
@@ -89,7 +105,7 @@ function detectDotenvFilesAndEnv(): { files: string[]; mergedEnv: StringMap } {
     if (typeof v === 'string') finalMerged[k] = v;
   }
 
-  return { files: allFiles, mergedEnv: finalMerged };
+  return { envFiles: allFiles, mergedEnv: finalMerged, profiles: profiles };
 }
 
 function parseCsv(value?: string): string[] {
@@ -113,15 +129,25 @@ function detectComposeBin(candidates: string[]): string | undefined {
   return undefined;
 }
 
-function ensureDataDirs(env: StringMap) {
+function ensureDataDirs(env: StringMap): {
+  baseDir: string;
+  dataBaseDir: string;
+  injectDir: string;
+  storeDir: string;
+} {
   const prefix = getPrefix();
   const baseDir = env[envKey('BASE_DIR', prefix)] || process.cwd();
   const dataBaseDir = env[envKey('DATA_BASE_DIR', prefix)] || path.join(baseDir, 'container-data');
   const injectDir = env[envKey('INJECT_DIR', prefix)] || path.join(dataBaseDir, 'inject');
   const storeDir = env[envKey('STORE_DIR', prefix)] || path.join(dataBaseDir, 'store');
 
-  mkdirSync(injectDir, { recursive: true });
-  mkdirSync(storeDir, { recursive: true });
+  env[envKey('BASE_DIR', prefix)] = baseDir;
+  env[envKey('DATA_BASE_DIR', prefix)] = dataBaseDir;
+  env[envKey('INJECT_DIR', prefix)] = injectDir;
+  env[envKey('STORE_DIR', prefix)] = storeDir;
+
+  mkdirSync(path.resolve(injectDir), { recursive: true });
+  mkdirSync(path.resolve(storeDir), { recursive: true });
 
   return { baseDir, dataBaseDir, injectDir, storeDir };
 }
@@ -149,19 +175,70 @@ function shellQuote(s: string): string {
   return `'${s.replaceAll("'", "'\\''")}'`;
 }
 
-function buildComposeArgs(envFiles: string[], mergedEnv: StringMap, extraArgs: string[]): string[] {
+function checkBinOrThrow(value: string | undefined, candidates: string[]) {
+  if (!value) {
+    console.error('compose-plus: No compose binary detected. Tried:', candidates.join(' | '));
+    process.exitCode = 1;
+    return false;
+  }
+
+  return true;
+}
+
+function buildComposeArgs(
+  projectNameFromArg: string | undefined,
+  envFiles: string[],
+  mergedEnv: StringMap,
+  profiles: string[],
+  extraArgs: string[],
+): string[] {
   const args: string[] = [];
   const prefix = getPrefix();
-  if (mergedEnv[envKey('PROJECT_NAME', prefix)]) {
+  if (projectNameFromArg) {
+    args.push('-p', projectNameFromArg);
+  } else if (mergedEnv[envKey('PROJECT_NAME', prefix)]) {
     args.push('-p', mergedEnv[envKey('PROJECT_NAME', prefix)]!);
   }
+
+  for (const p of profiles) {
+    args.push('--profile', p);
+  }
+
   for (const f of envFiles) {
     args.push('--env-file', f);
   }
+
   args.push(...extraArgs);
   return args;
 }
 
+function extractOptions(composeArgs: string[], options: any) {
+  const projectName = options.projectName as string | undefined;
+  const { envFiles, mergedEnv, profiles } = detectDotenvFilesAndEnv(options.profile);
+  const { storeDir } = ensureDataDirs(mergedEnv);
+
+  const prefix = getPrefix();
+  const userBins: string[] = Array.isArray(options.cmpBin) ? (options.cmpBin as string[]) : [];
+  const envBins = parseCsv(mergedEnv[envKey('COMPOSE_BIN', prefix)]);
+  let composeBin = '';
+  if (userBins.length > 0) {
+    const foundBin = detectComposeBin(userBins) ?? '';
+    if (!checkBinOrThrow(foundBin, userBins)) return;
+    composeBin = foundBin;
+  } else if (envBins.length > 0) {
+    const foundBin = detectComposeBin(envBins) ?? '';
+    if (!checkBinOrThrow(foundBin, envBins)) return;
+    composeBin = foundBin;
+  } else {
+    const foundBin = detectComposeBin(defaultBins) ?? '';
+    if (!checkBinOrThrow(foundBin, defaultBins)) return;
+    composeBin = foundBin;
+  }
+
+  const args = buildComposeArgs(projectName, envFiles, mergedEnv, profiles, composeArgs || []);
+
+  return { composeBin, args, mergedEnv, storeDir };
+}
 async function main() {
   const cwd = process.cwd();
   console.log(`compose-plus: cwd=${cwd}, version=${PACKAGE_VERSION}`);
@@ -176,73 +253,53 @@ async function main() {
     )
     .version(PACKAGE_VERSION)
     .allowUnknownOption(true)
-    .option('-b, --bin <value...>', 'Override compose binary candidates (priority order)')
+    .enablePositionalOptions()
+    .option('--cmp-bin <value...>', 'Override compose binary candidates (priority order)')
+    .option(
+      '-p, --project-name <value>',
+      'Compose project name to use (overrides CMP_PROJECT_NAME)',
+    )
+    .option('--profile <value...>', 'Profiles to use (comma-separated or multiple)')
     .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
     .action(async (composeArgs: string[], options) => {
-      const { files: envFiles, mergedEnv } = detectDotenvFilesAndEnv();
-      const { storeDir } = ensureDataDirs(mergedEnv);
-
-      const prefix = getPrefix();
-      const userBins: string[] = Array.isArray(options.bin) ? (options.bin as string[]) : [];
-      const envBins = parseCsv(mergedEnv[envKey('COMPOSE_BIN', prefix)]);
-      // const defaultBins = ['docker compose', 'podman compose', 'docker-compose', 'podman-compose'];
-      const defaultBins = ['xdocker compose', 'podman compose', 'docker-compose', 'podman-compose'];
-      const candidates = [...userBins, ...envBins, ...defaultBins].filter(Boolean);
-
-      const composeBin = detectComposeBin(candidates);
-      if (!composeBin) {
-        console.error('compose-plus: No compose binary detected. Tried:', candidates.join(' | '));
-        process.exitCode = 1;
-        return;
-      }
-
-      const args = buildComposeArgs(envFiles, mergedEnv, composeArgs || []);
+      const extracted = extractOptions(composeArgs, options);
+      if (!extracted) return;
+      const { composeBin, args, mergedEnv, storeDir } = extracted;
       const code = await runCompose(composeBin, args, {
         ...process.env,
         ...mergedEnv,
-        CMP_STORE_DIR: storeDir,
       });
       process.exitCode = code;
     });
 
   program
     .command('cmp-clean')
-    .description('Stop and remove containers, networks/volumes, and clear store directory')
     .allowUnknownOption(true)
-    .argument('[composeArgs...]', 'Extra args to pass to compose commands')
-    .action(async (composeArgs: string[]) => {
-      const { files: envFiles, mergedEnv } = detectDotenvFilesAndEnv();
-      const { storeDir } = ensureDataDirs(mergedEnv);
-
-      const prefix = getPrefix();
-      const envBins = parseCsv(mergedEnv[envKey('COMPOSE_BIN', prefix)]);
-      const defaultBins = ['docker compose', 'podman compose', 'docker-compose', 'podman-compose'];
-      const composeBin = detectComposeBin([...envBins, ...defaultBins]);
-      if (!composeBin) {
-        console.error('compose-plus: No compose binary detected for cmp-clean');
-        process.exit(1);
-      }
-
-      const baseArgs = buildComposeArgs(envFiles, mergedEnv, []);
+    .enablePositionalOptions()
+    .option('--cmp-bin <value...>', 'Override compose binary candidates (priority order)')
+    .option(
+      '-p, --project-name <value>',
+      'Compose project name to use (overrides CMP_PROJECT_NAME)',
+    )
+    .option('--profile <value...>', 'Profiles to use (comma-separated or multiple)')
+    .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
+    .action(async (composeArgs: string[], options) => {
+      const extracted = extractOptions(composeArgs, options);
+      if (!extracted) return;
+      const { composeBin, args, mergedEnv, storeDir } = extracted;
 
       // rm -fsv
-      let code = await runCompose(composeBin, [...baseArgs, 'rm', '-fsv', ...(composeArgs || [])], {
+      let code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
         ...process.env,
         ...mergedEnv,
-        CMP_STORE_DIR: storeDir,
       });
       if (code !== 0) return process.exit((process.exitCode = code));
 
       // down --volumes
-      code = await runCompose(
-        composeBin,
-        [...baseArgs, 'down', '--volumes', ...(composeArgs || [])],
-        {
-          ...process.env,
-          ...mergedEnv,
-          CMP_STORE_DIR: storeDir,
-        },
-      );
+      code = await runCompose(composeBin, [...(args || []), 'down', '--volumes'], {
+        ...process.env,
+        ...mergedEnv,
+      });
       if (code !== 0) return process.exit((process.exitCode = code));
 
       // rm -rf ${CMP_STORE_DIR}
@@ -259,35 +316,34 @@ async function main() {
     .command('cmp-clean-i')
     .description('Like cmp-clean and also remove local images referenced by the project')
     .allowUnknownOption(true)
-    .argument('[composeArgs...]', 'Extra args to pass to compose commands')
-    .action(async (composeArgs: string[]) => {
-      const { files: envFiles, mergedEnv } = detectDotenvFilesAndEnv();
-      const { storeDir } = ensureDataDirs(mergedEnv);
-
-      const prefix = getPrefix();
-      const envBins = parseCsv(mergedEnv[envKey('COMPOSE_BIN', prefix)]);
-      const defaultBins = ['docker compose', 'podman compose', 'docker-compose', 'podman-compose'];
-      const composeBin = detectComposeBin([...envBins, ...defaultBins]);
-      if (!composeBin) {
-        console.error('compose-plus: No compose binary detected for cmp-clean-i');
-        process.exit(1);
-      }
-
-      const baseArgs = buildComposeArgs(envFiles, mergedEnv, []);
+    .enablePositionalOptions()
+    .option('--cmp-bin <value...>', 'Override compose binary candidates (priority order)')
+    .option(
+      '-p, --project-name <value>',
+      'Compose project name to use (overrides CMP_PROJECT_NAME)',
+    )
+    .option('--profile <value...>', 'Profiles to use (comma-separated or multiple)')
+    .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
+    .action(async (composeArgs: string[], options) => {
+      const extracted = extractOptions(composeArgs, options);
+      if (!extracted) return;
+      const { composeBin, args, mergedEnv, storeDir } = extracted;
 
       // rm -fsv
-      let code = await runCompose(composeBin, [...baseArgs, 'rm', '-fsv', ...(composeArgs || [])], {
+      let code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
         ...process.env,
         ...mergedEnv,
-        CMP_STORE_DIR: storeDir,
       });
       if (code !== 0) return process.exit((process.exitCode = code));
 
-      // down --rmi local --volumes
+      // down --volumes
       code = await runCompose(
         composeBin,
-        [...baseArgs, 'down', '--rmi', 'local', '--volumes', ...(composeArgs || [])],
-        { ...process.env, ...mergedEnv, CMP_STORE_DIR: storeDir },
+        [...(args || []), 'down', '--rmi', 'local', '--volumes'],
+        {
+          ...process.env,
+          ...mergedEnv,
+        },
       );
       if (code !== 0) return process.exit((process.exitCode = code));
 
