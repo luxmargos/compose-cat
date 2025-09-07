@@ -1,0 +1,64 @@
+{
+  "name": "compose-plus",
+  "version": "0.0.1",
+  "description": "Compose Plus: a small CLI that generates and runs Docker/Podman Compose commands",
+  "private": false,
+  "type": "module",
+  "bin": {
+    "compose-plus": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "npm run build:prod",
+    "build:dev": "npm test && cross-env BUILD_MODE=development tsup",
+    "build:prod": "npm test && cross-env BUILD_MODE=production tsup",
+    "watch": "cross-env BUILD_MODE=development tsup --watch",
+    "dev": "npm run watch",
+    "start": "npm run build:prod && node dist/index.js",
+    "start:ts": "tsx src/index.ts",
+    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "format": "prettier --write .",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "docker",
+    "compose",
+    "podman",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "cross-env": "^10.0.0",
+    "eslint": "^9.9.0",
+    "prettier": "^3.3.3",
+    "tsup": "^8.2.4",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  },
+  "tsup": {
+    "entry": [
+      "src/index.ts"
+    ],
+    "outDir": "dist",
+    "format": [
+      "esm"
+    ],
+    "clean": true,
+    "minify": false,
+    "sourcemap": false,
+    "target": "node18",
+    "dts": false,
+    "banner": {
+      "js": "#!/usr/bin/env node"
+    }
+  }
+}
