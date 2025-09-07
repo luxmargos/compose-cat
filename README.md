@@ -2,7 +2,15 @@
 
 Compose Plus is a small CLI that generates and runs Docker/Podman Compose commands from your terminal.
 
-It passes all arguments through to the configured compose binary (for example, `docker compose`, `podman compose`, `docker-compose`, or `podman-compose`) and respects your environment-driven configuration.
+Use it like your usual compose command — just start with `compose-plus` instead of `docker compose`, `podman compose`, `docker-compose`, or `podman-compose`.
+
+Highlights:
+
+- Compose binary auto-detection with sensible defaults: `docker compose`, `podman compose`, `docker-compose`, `podman-compose`. You can override or reorder candidates.
+- Profile-aware dotenv loading with support for local-only overrides via `.env.local`. When profiles are provided, Compose Plus loads: `.env`, `.env.local`, `.env.<PROFILE>`, `.env.<PROFILE>.local`.
+- Project naming via `-p/--project-name` or `CMP_PROJECT_NAME`. Use different project names per profile if needed.
+- Standardized data directories via environment variables: `CMP_DATA_BASE_DIR`, `CMP_INJECT_DIR`, `CMP_STORE_DIR`.
+- Built-in cleanup commands: `cmp-clean`, `cmp-clean-i-local`, and `cmp-clean-i-all`.
 
 ## Quick Start
 
@@ -18,75 +26,88 @@ Or run without installing globally using npx:
 npx compose-plus <COMPOSE_COMMAND> [OPTIONS]
 ```
 
-Examples:
+Or install locally as a devDependency to use inside your project:
 
 ```sh
-# Bring services up with build
-compose-plus up -d --build
-
-# Use a specific binary
-compose-plus -b "podman compose" up -d
+npm install --save-dev compose-plus
 ```
 
-## Arguments
+Examples:
 
-- `-b, --bin`:
-  - Override the detected compose binary.
-  - Accepts multiple occurrences to set priority, e.g. `--bin "podman compose" --bin "docker compose"`.
-  - Examples: `docker compose`, `podman compose`, `/PATH/TO/BINARY`.
+Bring services up:
 
-- `--version`: Print Compose Plus version.
+```sh
+compose-plus up -d
+```
+
+Stop and remove services:
+
+```sh
+compose-plus down
+```
+
+## CLI Options
+
+- `--cmp-bin <value...>`: Provide compose binary candidates in priority order.
+  - Example: `--cmp-bin "podman compose" --cmp-bin "docker compose"`.
+- `--cmp-prefix <value>`: Set the environment variable prefix (default: `CMP_`).
+  - Also configurable via `COMPOSE_PLUS_PREFIX`.
+- `--cmp-dotenv-prefix <value>`: Set the dotenv file prefix to detect (default: `.env`).
+  - Also configurable via `COMPOSE_PLUS_DOTENV_PREFIX`.
+- `-p, --project-name <value>`: Compose project name (overrides `CMP_PROJECT_NAME`).
+- `--profile <value...>`: Profiles to use (comma-separated or repeat the flag), e.g. `--profile dev` or `--profile dev,test`.
 
 ## Commands
 
-- `cmp-clean`: Convenience cleanup. Removes containers and volumes, and deletes files under `${CMP_STORE_DIR}` that are bind-mounted from the host.
-  - Stop and remove containers: `${CMP_DETECTED_COMPOSE_BIN} rm -fsv`
-  - Remove containers and networks: `${CMP_DETECTED_COMPOSE_BIN} down --volumes`
-  - Remove bind-mounted data on host: `rm -rf ${CMP_STORE_DIR}`
+- `cmp-clean`: Convenience cleanup. Removes containers and networks/volumes, then clears `${CMP_STORE_DIR}` on the host.
+  - `${CMP_DETECTED_COMPOSE_BIN} rm -fsv`
+  - `${CMP_DETECTED_COMPOSE_BIN} down --volumes`
+  - `rm -rf ${CMP_STORE_DIR}`
 
-- `cmp-clean-i`: Like `cmp-clean`, and also removes local images referenced by the project.
-  - Stop and remove containers: `${CMP_DETECTED_COMPOSE_BIN} rm -fsv`
-  - Remove containers, networks, and local images: `${CMP_DETECTED_COMPOSE_BIN} down --rmi local --volumes`
-  - Remove bind-mounted data on host: `rm -rf ${CMP_STORE_DIR}`
+- `cmp-clean-i-local`: Like `cmp-clean`, and also removes images referenced by services that don’t have a custom tag.
+  - `${CMP_DETECTED_COMPOSE_BIN} rm -fsv`
+  - `${CMP_DETECTED_COMPOSE_BIN} down --rmi local --volumes`
+  - `rm -rf ${CMP_STORE_DIR}`
+
+- `cmp-clean-i-all`: Like `cmp-clean`, and also removes all images referenced by the services.
+  - `${CMP_DETECTED_COMPOSE_BIN} rm -fsv`
+  - `${CMP_DETECTED_COMPOSE_BIN} down --rmi all --volumes`
+  - `rm -rf ${CMP_STORE_DIR}`
 
 ## How It Works
 
-1. Detect profiles from `--profile` options.
-2. Set the environment variable prefix from `COMPOSE_PLUS_PREFIX` (default: `CMP`).
-3. Load dotenv files: `.env`, `.env.local`, `.env.<PROFILE>`, `.env.<PROFILE>.local`.
-4. Detect the compose binary from `CMP_COMPOSE_BIN`, then optionally override via `--bin`.
-5. Generate the compose command with computed options and flags.
-6. Execute pre-hook scripts if present.
-7. Execute the compose command.
-8. Execute post-hook scripts if present.
-9. Exit with the same exit code as the compose command.
+1. Read CLI options (including profiles, project name, prefix overrides).
+2. Determine the environment variable prefix from `--cmp-prefix` or `COMPOSE_PLUS_PREFIX` (default: `CMP_`).
+3. Determine the dotenv prefix from `--cmp-dotenv-prefix` or `COMPOSE_PLUS_DOTENV_PREFIX` (default: `.env`).
+4. Load dotenv files: `.env`, `.env.local`, and for each profile: `.env.<PROFILE>`, `.env.<PROFILE>.local`.
+5. Detect the compose binary from `CMP_COMPOSE_BIN` (if set) or probe defaults; you can override order with `--cmp-bin`.
+6. Build the compose command: add `--env-file` flags, `--profile` flags, and `-p/--project-name` when provided.
+7. Execute the compose command and exit with its status code.
 
-## Special Flow for `cmp-clean` and `cmp-clean-i`
+## Special Flow for Cleanup Commands
 
-Same as the general flow, except step 5 expands to a sequence of commands executed in order:
-
-1. `${CMP_DETECTED_COMPOSE_BIN} rm -fsv`
-2. `${CMP_DETECTED_COMPOSE_BIN} down --volumes` (or `${CMP_DETECTED_COMPOSE_BIN} down --rmi local --volumes` for `cmp-clean-i`)
-3. `rm -rf ${CMP_STORE_DIR}`
+The cleanup commands follow the general flow, but expand to multiple compose commands executed in sequence (see “Commands” above for exact arguments), followed by removing `${CMP_STORE_DIR}` on the host.
 
 ## Environment Variables
 
-All environment variables default to the `CMP` prefix. You can change this prefix with `COMPOSE_PLUS_PREFIX`.
-
-### `COMPOSE_PLUS_DOTENV_PREFIX`
-
-- Changes the dotenv file prefix used for detection.
-- Default: `.env`
+You can set these environment variables to control detection and defaults.
 
 ### `COMPOSE_PLUS_PREFIX`
 
-- Sets the prefix for all Compose Plus-related environment variables.
+- Sets the prefix for all Compose Plus–related environment variables.
 - Default: `CMP_`
-- Example: `COMPOSE_PLUS_PREFIX=MyPrefix_` makes variables like `MyPrefix_COMPOSE_BIN` instead of `CMP_COMPOSE_BIN`.
+- Example: `COMPOSE_PLUS_PREFIX=MyPrefix_` yields variables like `MyPrefix_COMPOSE_BIN` instead of `CMP_COMPOSE_BIN`.
+
+### `COMPOSE_PLUS_DOTENV_PREFIX`
+
+- Sets the dotenv file prefix used for detection.
+- Default: `.env`
+
+## Compose Plus Environment Variables
+
+All listed variables use the active prefix (default `CMP_`).
 
 ### `CMP_COMPOSE_BIN`
-
-The environment variable to specify the compose binary to use the `CMP_DETECTED_COMPOSE_BIN` is derived from this variable.
 
 - Comma-separated list of compose binaries to probe, in order.
 - If unset, Compose Plus probes in this order: `docker compose`, `podman compose`, `docker-compose`, `podman-compose`.
@@ -95,10 +116,14 @@ The environment variable to specify the compose binary to use the `CMP_DETECTED_
   - `CMP_COMPOSE_BIN=podman compose`
   - `CMP_COMPOSE_BIN=podman compose,docker compose`
 
+### `CMP_DETECTED_COMPOSE_BIN`
+
+- Set by Compose Plus to the compose binary that was selected at runtime.
+
 ### `CMP_PROJECT_NAME`
 
-- If user has `-p, --project-name` already, this variable will be ignored.
-- If set, passed as `-p, --project-name ${CMP_PROJECT_NAME}` to the compose command.
+- If `-p/--project-name` is provided, this variable is ignored.
+- Otherwise, if set, it is passed as `-p, --project-name ${CMP_PROJECT_NAME}` to compose.
 - Useful for selecting per-profile project names.
 
 ### `CMP_BASE_DIR`
@@ -127,51 +152,19 @@ The environment variable to specify the compose binary to use the `CMP_DETECTED_
 
 Compose Plus discovers dotenv files at startup and adds them to the compose command as `--env-file` flags.
 
-The following files will be used if present:
+The following files are used if present:
 
 - Base files:
-  - `.env` → `${CMP_DETECTED_COMPOSE_BIN} --env-file .env`
-  - `.env.local` → `${CMP_DETECTED_COMPOSE_BIN} --env-file .env --env-file .env.local`
+  - `.env`
+  - `.env.local`
 
-- Profile files (`<PROFILE>` comes from `--profile`):
-  - `.env.<PROFILE>` → `${CMP_DETECTED_COMPOSE_BIN} --env-file .env.<PROFILE>`
-  - `.env.<PROFILE>.local` (if present) → `${CMP_DETECTED_COMPOSE_BIN} --env-file .env.<PROFILE> --env-file .env.<PROFILE>.local`
+- Profile files (each `<PROFILE>` comes from `--profile`):
+  - `.env.<PROFILE>`
+  - `.env.<PROFILE>.local`
 
-The prefix used for detection is configurable via `CMP_DOTENV_PREFIX` (default `.env`).
+The dotenv file prefix is configurable via `--cmp-dotenv-prefix` or `COMPOSE_PLUS_DOTENV_PREFIX`.
 
-## Hooks
+## Notes
 
-You can integrate hook scripts that run before and after the compose command. Compose Plus discovers scripts per event and platform:
-
-- `cmp.${COMMAND}.pre.${BINARY}.${EXTENSION}`
-- `cmp.${COMMAND}.${PLATFORM}.pre.${BINARY}.${EXTENSION}`
-- `cmp.${COMMAND}.post.${BINARY}.${EXTENSION}`
-- `cmp.${COMMAND}.${PLATFORM}.post.${BINARY}.${EXTENSION}`
-
-Where:
-
-- `COMMAND`: compose command name, e.g. `up`, `down`, `rm`.
-- `BINARY`: script runner, e.g. `sh`, `zsh`, `bash`, `pwsh`, `powershell`, `powershell.exe`, `node`, `python`, `cmd`, `cmd.exe`.
-- `PLATFORM`: Node.js platform identifier, e.g. `win32`, `linux`, `darwin`.
-
-Compose Plus detects an executable for the chosen `BINARY` in your environment and executes the script with it.
-
-Examples for `up`:
-
-- Windows (`win32`):
-  - `cmp.up.pre.${BINARY}.${EXTENSION}`
-  - `cmp.up.win32.pre.${BINARY}.${EXTENSION}`
-  - `cmp.up.post.${BINARY}.${EXTENSION}`
-  - `cmp.up.win32.post.${BINARY}.${EXTENSION}`
-
-- Linux (`linux`):
-  - `cmp.up.pre.${BINARY}.${EXTENSION}`
-  - `cmp.up.linux.pre.${BINARY}.${EXTENSION}`
-  - `cmp.up.post.${BINARY}.${EXTENSION}`
-  - `cmp.up.linux.post.${BINARY}.${EXTENSION}`
-
-- macOS (`darwin`):
-  - `cmp.up.pre.${BINARY}.${EXTENSION}`
-  - `cmp.up.darwin.pre.${BINARY}.${EXTENSION}`
-  - `cmp.up.post.${BINARY}.${EXTENSION}`
-  - `cmp.up.darwin.post.${BINARY}.${EXTENSION}`
+- Hooks are not implemented in this version.
+- <del>Use `--` to force pass-through of all following arguments if needed, e.g. `compose-plus -- up -d --build`.</del>

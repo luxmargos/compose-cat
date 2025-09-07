@@ -3,7 +3,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseDotenv } from 'dotenv';
+import { parse as parseDotenv, populate } from 'dotenv';
 import packageJson from '../package.json' with { type: 'json' };
 import { e } from 'vite-node/dist/index-z0R8hVRu.js';
 
@@ -13,30 +13,38 @@ const PACKAGE_VERSION = packageJson.version;
 
 const defaultBins = ['docker compose', 'podman compose', 'docker-compose', 'podman-compose'];
 
+const DEFAULT_PREFIX = 'CMP_';
+const DEFAULT_DOTENV_PREFIX = '.env';
+
+let prefixFromOptions: string | undefined = undefined;
+let dotenvPrefixFromOptions: string | undefined = undefined;
 function getPrefix(): string {
-  return process.env.COMPOSE_PLUS_PREFIX || 'CMP_';
+  return prefixFromOptions || process.env.COMPOSE_PLUS_PREFIX || DEFAULT_PREFIX;
 }
 
 function getDotenvPrefix(): string {
-  return process.env.COMPOSE_PLUS_DOTENV_PREFIX || '.env';
+  return dotenvPrefixFromOptions || process.env.COMPOSE_PLUS_DOTENV_PREFIX || DEFAULT_DOTENV_PREFIX;
 }
 
 function envKey(
-  key: 'BASE_DIR' | 'DATA_BASE_DIR' | 'INJECT_DIR' | 'STORE_DIR' | 'COMPOSE_BIN' | 'PROJECT_NAME',
+  key:
+    | 'BASE_DIR'
+    | 'DATA_BASE_DIR'
+    | 'INJECT_DIR'
+    | 'STORE_DIR'
+    | 'COMPOSE_BIN'
+    | 'PROJECT_NAME'
+    | 'DETECTED_COMPOSE_BIN',
   prefix = getPrefix(),
 ) {
   return `${prefix}${key}`;
 }
 
-function readEnvFile(file: string): StringMap {
+function mergeEnv(base: any, file: string): StringMap {
   try {
     const content = readFileSync(file, 'utf8');
-    const parsed = parseDotenv(content);
-    const result: StringMap = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (typeof v === 'string') result[k] = v;
-    }
-    return result;
+    populate(base, parseDotenv(content));
+    return base;
   } catch {
     return {};
   }
@@ -70,10 +78,10 @@ function detectDotenvFilesAndEnv(profileFromCli?: string[] | string): {
   ];
 
   // Load base files to possibly discover PROFILE from them as well.
-  const baseMerged = {} as StringMap;
+  const baseMerged = JSON.parse(JSON.stringify(process.env ?? {})) as StringMap;
   for (const f of baseFiles) {
     if (!existsSync(f)) continue;
-    Object.assign(baseMerged, readEnvFile(f));
+    mergeEnv(baseMerged, f);
   }
 
   // Determine profiles: CLI overrides env/dotenv
@@ -96,16 +104,10 @@ function detectDotenvFilesAndEnv(profileFromCli?: string[] | string): {
   // Merge env in order; later files override earlier ones.
   const merged: StringMap = {};
   for (const f of allFiles) {
-    Object.assign(merged, readEnvFile(f));
+    mergeEnv(baseMerged, f);
   }
 
-  // Do not override actual OS env values.
-  const finalMerged: StringMap = { ...merged };
-  for (const [k, v] of Object.entries(process.env)) {
-    if (typeof v === 'string') finalMerged[k] = v;
-  }
-
-  return { envFiles: allFiles, mergedEnv: finalMerged, profiles: profiles };
+  return { envFiles: allFiles, mergedEnv: baseMerged, profiles: profiles };
 }
 
 function parseCsv(value?: string): string[] {
@@ -141,10 +143,11 @@ function ensureDataDirs(env: StringMap): {
   const injectDir = env[envKey('INJECT_DIR', prefix)] || path.join(dataBaseDir, 'inject');
   const storeDir = env[envKey('STORE_DIR', prefix)] || path.join(dataBaseDir, 'store');
 
-  env[envKey('BASE_DIR', prefix)] = baseDir;
-  env[envKey('DATA_BASE_DIR', prefix)] = dataBaseDir;
-  env[envKey('INJECT_DIR', prefix)] = injectDir;
-  env[envKey('STORE_DIR', prefix)] = storeDir;
+  // Export to process.env for use by compose or other tools
+  setProcessEnv(envKey('BASE_DIR', prefix), baseDir);
+  setProcessEnv(envKey('DATA_BASE_DIR', prefix), dataBaseDir);
+  setProcessEnv(envKey('INJECT_DIR', prefix), injectDir);
+  setProcessEnv(envKey('STORE_DIR', prefix), storeDir);
 
   mkdirSync(path.resolve(injectDir), { recursive: true });
   mkdirSync(path.resolve(storeDir), { recursive: true });
@@ -160,7 +163,9 @@ async function runShellCommand(cmd: string, env: NodeJS.ProcessEnv): Promise<num
       if (typeof code === 'number') resolve(code);
       else resolve(signal ? 1 : 0);
     });
-    child.on('error', () => resolve(1));
+    child.on('error', () => {
+      resolve(1);
+    });
   });
 }
 
@@ -185,6 +190,9 @@ function checkBinOrThrow(value: string | undefined, candidates: string[]) {
   return true;
 }
 
+function setProcessEnv(key: string, value: string) {
+  process.env[key] = value;
+}
 function buildComposeArgs(
   projectNameFromArg: string | undefined,
   envFiles: string[],
@@ -194,10 +202,10 @@ function buildComposeArgs(
 ): string[] {
   const args: string[] = [];
   const prefix = getPrefix();
-  if (projectNameFromArg) {
-    args.push('-p', projectNameFromArg);
-  } else if (mergedEnv[envKey('PROJECT_NAME', prefix)]) {
-    args.push('-p', mergedEnv[envKey('PROJECT_NAME', prefix)]!);
+  const projectName = projectNameFromArg || mergedEnv[envKey('PROJECT_NAME', prefix)] || '';
+  if (projectName) {
+    setProcessEnv(envKey('PROJECT_NAME', prefix), projectName);
+    args.push('-p', projectName);
   }
 
   for (const p of profiles) {
@@ -212,10 +220,13 @@ function buildComposeArgs(
   return args;
 }
 
-function extractOptions(composeArgs: string[], options: any) {
+function prepare(composeArgs: string[], options: any) {
   const projectName = options.projectName as string | undefined;
   const { envFiles, mergedEnv, profiles } = detectDotenvFilesAndEnv(options.profile);
   const { storeDir } = ensureDataDirs(mergedEnv);
+
+  prefixFromOptions = options.cmpPrefix as string | undefined;
+  dotenvPrefixFromOptions = options.cmpDotenvPrefix as string | undefined;
 
   const prefix = getPrefix();
   const userBins: string[] = Array.isArray(options.cmpBin) ? (options.cmpBin as string[]) : [];
@@ -234,6 +245,8 @@ function extractOptions(composeArgs: string[], options: any) {
     if (!checkBinOrThrow(foundBin, defaultBins)) return;
     composeBin = foundBin;
   }
+
+  setProcessEnv(envKey('DETECTED_COMPOSE_BIN', prefix), composeBin);
 
   const args = buildComposeArgs(projectName, envFiles, mergedEnv, profiles, composeArgs || []);
 
@@ -254,20 +267,25 @@ async function main() {
     .version(PACKAGE_VERSION)
     .allowUnknownOption(true)
     .enablePositionalOptions()
-    .option('--cmp-bin <value...>', 'Override compose binary candidates (priority order)')
+    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
+    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
+    .option(
+      '--cmp-dotenv-prefix <value>',
+      'Set the dotenv file prefix to detect (default: .env)',
+    )
     .option(
       '-p, --project-name <value>',
-      'Compose project name to use (overrides CMP_PROJECT_NAME)',
+      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
     )
-    .option('--profile <value...>', 'Profiles to use (comma-separated or multiple)')
+    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
     .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
     .action(async (composeArgs: string[], options) => {
-      const extracted = extractOptions(composeArgs, options);
+      const extracted = prepare(composeArgs, options);
       if (!extracted) return;
       const { composeBin, args, mergedEnv, storeDir } = extracted;
       const code = await runCompose(composeBin, args, {
         ...process.env,
-        ...mergedEnv,
+        // ...mergedEnv,
       });
       process.exitCode = code;
     });
@@ -276,29 +294,34 @@ async function main() {
     .command('cmp-clean')
     .allowUnknownOption(true)
     .enablePositionalOptions()
-    .option('--cmp-bin <value...>', 'Override compose binary candidates (priority order)')
+    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
+    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
+    .option(
+      '--cmp-dotenv-prefix <value>',
+      'Set the dotenv file prefix to detect (default: .env)',
+    )
     .option(
       '-p, --project-name <value>',
-      'Compose project name to use (overrides CMP_PROJECT_NAME)',
+      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
     )
-    .option('--profile <value...>', 'Profiles to use (comma-separated or multiple)')
+    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
     .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
     .action(async (composeArgs: string[], options) => {
-      const extracted = extractOptions(composeArgs, options);
+      const extracted = prepare(composeArgs, options);
       if (!extracted) return;
       const { composeBin, args, mergedEnv, storeDir } = extracted;
 
       // rm -fsv
       let code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
         ...process.env,
-        ...mergedEnv,
+        // ...mergedEnv,
       });
       if (code !== 0) return process.exit((process.exitCode = code));
 
       // down --volumes
       code = await runCompose(composeBin, [...(args || []), 'down', '--volumes'], {
         ...process.env,
-        ...mergedEnv,
+        // ...mergedEnv,
       });
       if (code !== 0) return process.exit((process.exitCode = code));
 
@@ -313,36 +336,91 @@ async function main() {
     });
 
   program
-    .command('cmp-clean-i')
-    .description('Like cmp-clean and also remove local images referenced by the project')
+    .command('cmp-clean-i-local')
+    .description('Like cmp-clean and also removes images for services without a custom tag')
     .allowUnknownOption(true)
     .enablePositionalOptions()
-    .option('--cmp-bin <value...>', 'Override compose binary candidates (priority order)')
+    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
+    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
+    .option(
+      '--cmp-dotenv-prefix <value>',
+      'Set the dotenv file prefix to detect (default: .env)',
+    )
     .option(
       '-p, --project-name <value>',
-      'Compose project name to use (overrides CMP_PROJECT_NAME)',
+      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
     )
-    .option('--profile <value...>', 'Profiles to use (comma-separated or multiple)')
+    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
     .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
     .action(async (composeArgs: string[], options) => {
-      const extracted = extractOptions(composeArgs, options);
+      const extracted = prepare(composeArgs, options);
       if (!extracted) return;
       const { composeBin, args, mergedEnv, storeDir } = extracted;
 
       // rm -fsv
       let code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
         ...process.env,
-        ...mergedEnv,
+        // ...mergedEnv,
       });
       if (code !== 0) return process.exit((process.exitCode = code));
 
-      // down --volumes
+      // down --rmi local --volumes
       code = await runCompose(
         composeBin,
         [...(args || []), 'down', '--rmi', 'local', '--volumes'],
         {
           ...process.env,
-          ...mergedEnv,
+          // ...mergedEnv,
+        },
+      );
+      if (code !== 0) return process.exit((process.exitCode = code));
+
+      // rm -rf ${CMP_STORE_DIR}
+      try {
+        rmSync(storeDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+
+      process.exit(0);
+    });
+
+  program
+    .command('cmp-clean-i-all')
+    .description('Like cmp-clean and also removes all images referenced by the services')
+    .allowUnknownOption(true)
+    .enablePositionalOptions()
+    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
+    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
+    .option(
+      '--cmp-dotenv-prefix <value>',
+      'Set the dotenv file prefix to detect (default: .env)',
+    )
+    .option(
+      '-p, --project-name <value>',
+      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
+    )
+    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
+    .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
+    .action(async (composeArgs: string[], options) => {
+      const extracted = prepare(composeArgs, options);
+      if (!extracted) return;
+      const { composeBin, args, mergedEnv, storeDir } = extracted;
+
+      // rm -fsv
+      let code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
+        ...process.env,
+        // ...mergedEnv,
+      });
+      if (code !== 0) return process.exit((process.exitCode = code));
+
+      // down --rmi all --volumes
+      code = await runCompose(
+        composeBin,
+        [...(args || []), 'down', '--rmi', 'all', '--volumes'],
+        {
+          ...process.env,
+          // ...mergedEnv,
         },
       );
       if (code !== 0) return process.exit((process.exitCode = code));
