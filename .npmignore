@@ -1,1 +1,8 @@
 dist/**/*.map
+test/**
+.vscode/**
+.eslintrc.json
+.prettierrc.json
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
