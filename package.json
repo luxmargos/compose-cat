@@ -1,9 +1,17 @@
 {
   "name": "compose-plus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Compose Plus: a small CLI that generates and runs Docker/Podman Compose commands",
   "private": false,
   "type": "module",
+  "author": {
+    "name": "Luxmargos",
+    "email": "owlflyx12@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luxmargos/compose-plus.git"
+  },
   "bin": {
     "compose-plus": "dist/index.js"
   },
@@ -31,7 +39,6 @@
     "podman",
     "cli"
   ],
-  "author": "",
   "license": "MIT",
   "dependencies": {
     "commander": "^12.1.0",
