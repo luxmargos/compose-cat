@@ -6,3 +6,6 @@ test/**
 tsconfig.json
 tsup.config.ts
 vitest.config.ts
+container-data/**
+src/**
+AGENTS.md
