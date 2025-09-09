@@ -6,11 +6,12 @@ Use it like your usual compose command — just start with `compose-plus` instea
 
 Highlights:
 
-- Compose binary auto-detection with sensible defaults: `docker compose`, `podman compose`, `docker-compose`, `podman-compose`. You can override or reorder candidates.
+- Compose binary auto-detection with sensible defaults: `docker compose`, `podman compose`, `docker-compose`, `podman-compose`. You can override or reorder candidates via `--cmp-bin` or `CMP_COMPOSE_BIN`.
 - Profile-aware dotenv loading with support for local-only overrides via `.env.local`. When profiles are provided, Compose Plus loads: `.env`, `.env.local`, `.env.<PROFILE>`, `.env.<PROFILE>.local`.
 - Project naming via `-p/--project-name` or `CMP_PROJECT_NAME`. Use different project names per profile if needed.
 - Standardized data directories via environment variables: `CMP_DATA_BASE_DIR`, `CMP_INJECT_DIR`, `CMP_STORE_DIR`.
 - Built-in cleanup commands: `cmp-clean`, `cmp-clean-i-local`, and `cmp-clean-i-all`.
+- Pluggable pre/post hooks with per-command, per-platform, and per-binary variants.
 
 ## Quick Start
 
@@ -20,12 +21,6 @@ Install globally with npm:
 npm install -g compose-plus
 ```
 
-Or run without installing globally using npx:
-
-```sh
-npx compose-plus <COMPOSE_COMMAND> [OPTIONS]
-```
-
 Or install locally as a devDependency to use inside your project:
 
 ```sh
@@ -33,6 +28,18 @@ npm install --save-dev compose-plus
 ```
 
 Examples:
+
+Usage:
+
+```sh
+compose-plus <COMPOSE_COMMAND> [OPTIONS]
+```
+
+Run using npx:
+
+```sh
+npx compose-plus <COMPOSE_COMMAND> [OPTIONS]
+```
 
 Bring services up:
 
@@ -48,6 +55,7 @@ compose-plus down
 
 ## CLI Options
 
+- `--cmp-hook <value...>`: Hook names to run (pre and post). Example: `--cmp-hook up` runs matching `cmp.pre.up.*` and `cmp.post.up.*` hooks.
 - `--cmp-bin <value...>`: Provide compose binary candidates in priority order.
   - Example: `--cmp-bin "podman compose" --cmp-bin "docker compose"`.
 - `--cmp-prefix <value>`: Set the environment variable prefix (default: `CMP_`).
@@ -55,7 +63,7 @@ compose-plus down
 - `--cmp-dotenv-prefix <value>`: Set the dotenv file prefix to detect (default: `.env`).
   - Also configurable via `COMPOSE_PLUS_DOTENV_PREFIX`.
 - `-p, --project-name <value>`: Compose project name (overrides `CMP_PROJECT_NAME`).
-- `--profile <value...>`: Profiles to use (comma-separated or repeat the flag), e.g. `--profile dev` or `--profile dev,test`.
+- `--profile <value...>`: Profiles to use (comma-separated or repeat the flag), e.g., `--profile dev` or `--profile dev,test`.
 
 ## Commands
 
@@ -76,13 +84,15 @@ compose-plus down
 
 ## How It Works
 
-1. Read CLI options (including profiles, project name, prefix overrides).
+1. Read CLI options (including profiles, project name, and prefix overrides).
 2. Determine the environment variable prefix from `--cmp-prefix` or `COMPOSE_PLUS_PREFIX` (default: `CMP_`).
 3. Determine the dotenv prefix from `--cmp-dotenv-prefix` or `COMPOSE_PLUS_DOTENV_PREFIX` (default: `.env`).
 4. Load dotenv files: `.env`, `.env.local`, and for each profile: `.env.<PROFILE>`, `.env.<PROFILE>.local`.
-5. Detect the compose binary from `CMP_COMPOSE_BIN` (if set) or probe defaults; you can override order with `--cmp-bin`.
+5. Detect the compose binary from `CMP_COMPOSE_BIN` (if set) or probe defaults; you can override the order with `--cmp-bin`.
 6. Build the compose command: add `--env-file` flags, `--profile` flags, and `-p/--project-name` when provided.
-7. Execute the compose command and exit with its status code.
+7. Run matching pre-hooks.
+8. Execute the compose command and capture its exit code.
+9. Run matching post-hooks and exit with the final status code.
 
 ## Special Flow for Cleanup Commands
 
@@ -166,31 +176,25 @@ The dotenv file prefix is configurable via `--cmp-dotenv-prefix` or `COMPOSE_PLU
 
 ## Hooks
 
-You can integrate hook scripts that run before and after the compose command. Compose Plus discovers scripts per event and platform:
+You can integrate hook scripts that run before and after the compose command. Compose Plus searches for hook files in the current working directory and supports per-command, per-platform, and per-binary variants.
 
-- Minimal:
-  - `cmp.post.<EXT>`
-- With Hook Option:
-  - `cmp.post.<HOOK>.<EXT>`
-- With Platform Option:
-  - `cmp.post.<PLATFORM>.<EXT>`
-- With Binary Option:
-  - `cmp.post.+<BINARY>.<EXT>`
-- With Platform+Binary Option:
-  - `cmp.post.<PLATFORM>+<BINARY>.<EXT>`
-- With Hook and Platform+Binary Option:
-  - `cmp.post.<HOOK>.<Platform>+<BINARY>.<EXT>`
+File name patterns (where `stage` is `pre` or `post`):
+
+- Base: `cmp.<stage>.<EXT>`
+- Platform: `cmp.<stage>.<PLATFORM>.<EXT>`
+- Binary: `cmp.<stage>.+<BINARY>.<EXT>`
+- Platform + Binary: `cmp.<stage>.<PLATFORM>+<BINARY>.<EXT>`
+- Hook name: `cmp.<stage>.<HOOK>.<EXT>`
+- Hook name + Platform/Binary: `cmp.<stage>.<HOOK>.<PLATFORM>+<BINARY>.<EXT>`
 
 Where:
 
-- `HOOK`: You can specify to run custom hook name via `--cmp-hook` argument.
-- `PLATFORM`: You can specify platform to execute, e.g., `win32` or `windows` for windows, `darwin` or `macos` for macos, `linux` for linux.
-- `BINARY`: You can binary to execute hook script.
-- `EXT`: File extension
+- `HOOK`: Hook name provided via the `--cmp-hook` argument (e.g., `up`).
+- `PLATFORM`: Target platform. Use `win32` or `windows` for Windows, `darwin` or `macos` for macOS, and `linux` for Linux.
+- `BINARY`: Executable used to run the script (e.g., `bash`, `sh`, `pwsh`, `node`). If omitted, the file itself is executed. Ensure it is executable or includes a shebang.
+- `EXT`: File extension (e.g., `sh`, `ps1`, `js`).
 
-Examples for `--cmp-hook=up`:
-
-Following existing and conditional hook scripts are can be executed.
+Examples when running with `--cmp-hook=up` (if present, these may execute):
 
 - `cmp.pre.sh`
 - `cmp.pre.linux.sh`
@@ -217,6 +221,14 @@ Following existing and conditional hook scripts are can be executed.
 - `cmp.post.up.win32+pwsh.ps1`
 - `cmp.post.up.+node.js`
 
+Environment variables exposed to hooks:
+
+- `CMP_HOOK_EVENT`: The stage (`pre` or `post`).
+- `CMP_HOOK_COMMAND`: The hook name when `--cmp-hook` is provided; otherwise empty.
+- `CMP_HOOK_PLATFORM`: The matched platform string, if any.
+- `CMP_HOOK_BINARY`: The matched binary string, if any.
+- `CMP_HOOK_FILE`: The absolute path of the hook file being executed.
+
 ## Notes
 
-- <del>Use `--` to force pass-through of all following arguments if needed, e.g. `compose-plus -- up -d --build`.</del>
+- You don’t need `--` to pass through arguments; the CLI forwards unknown options and positional arguments to the underlying compose command.
