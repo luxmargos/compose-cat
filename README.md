@@ -164,7 +164,59 @@ The following files are used if present:
 
 The dotenv file prefix is configurable via `--cmp-dotenv-prefix` or `COMPOSE_PLUS_DOTENV_PREFIX`.
 
+## Hooks
+
+You can integrate hook scripts that run before and after the compose command. Compose Plus discovers scripts per event and platform:
+
+- Minimal:
+  - `cmp.post.<EXT>`
+- With Hook Option:
+  - `cmp.post.<HOOK>.<EXT>`
+- With Platform Option:
+  - `cmp.post.<PLATFORM>.<EXT>`
+- With Binary Option:
+  - `cmp.post.+<BINARY>.<EXT>`
+- With Platform+Binary Option:
+  - `cmp.post.<PLATFORM>+<BINARY>.<EXT>`
+- With Hook and Platform+Binary Option:
+  - `cmp.post.<HOOK>.<Platform>+<BINARY>.<EXT>`
+
+Where:
+
+- `HOOK`: You can specify to run custom hook name via `--cmp-hook` argument.
+- `PLATFORM`: You can specify platform to execute, e.g., `win32` or `windows` for windows, `darwin` or `macos` for macos, `linux` for linux.
+- `BINARY`: You can binary to execute hook script.
+- `EXT`: File extension
+
+Examples for `--cmp-hook=up`:
+
+Following existing and conditional hook scripts are can be executed.
+
+- `cmp.pre.sh`
+- `cmp.pre.linux.sh`
+- `cmp.pre.darwin.sh`
+- `cmp.pre.win32.ps1`
+- `cmp.pre.win32+pwsh.ps1`
+- `cmp.pre.+node.js`
+- `cmp.pre.up.sh`
+- `cmp.pre.up.linux.sh`
+- `cmp.pre.up.darwin.sh`
+- `cmp.pre.up.win32.ps1`
+- `cmp.pre.up.win32+pwsh.ps1`
+- `cmp.pre.up.+node.js`
+- `cmp.post.sh`
+- `cmp.post.linux.sh`
+- `cmp.post.darwin.sh`
+- `cmp.post.win32.ps1`
+- `cmp.post.win32+pwsh.ps1`
+- `cmp.post.+node.js`
+- `cmp.post.up.sh`
+- `cmp.post.up.linux.sh`
+- `cmp.post.up.darwin.sh`
+- `cmp.post.up.win32.ps1`
+- `cmp.post.up.win32+pwsh.ps1`
+- `cmp.post.up.+node.js`
+
 ## Notes
 
-- Hooks are not implemented in this version.
 - <del>Use `--` to force pass-through of all following arguments if needed, e.g. `compose-plus -- up -d --build`.</del>

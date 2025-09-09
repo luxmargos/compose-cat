@@ -1,11 +1,9 @@
 import { Command } from 'commander';
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parse as parseDotenv, populate } from 'dotenv';
 import packageJson from '../package.json' with { type: 'json' };
-import { e } from 'vite-node/dist/index-z0R8hVRu.js';
 
 type StringMap = Record<string, string>;
 
@@ -157,7 +155,7 @@ function ensureDataDirs(env: StringMap): {
 
 async function runShellCommand(cmd: string, env: NodeJS.ProcessEnv): Promise<number> {
   return new Promise((resolve) => {
-    console.log(`Running: ${cmd}`);
+    console.log(`[RUNNING] ${cmd}`);
     const child = spawn(cmd, { stdio: 'inherit', shell: true, env });
     child.on('exit', (code, signal) => {
       if (typeof code === 'number') resolve(code);
@@ -193,6 +191,7 @@ function checkBinOrThrow(value: string | undefined, candidates: string[]) {
 function setProcessEnv(key: string, value: string) {
   process.env[key] = value;
 }
+
 function buildComposeArgs(
   projectNameFromArg: string | undefined,
   envFiles: string[],
@@ -218,6 +217,119 @@ function buildComposeArgs(
 
   args.push(...extraArgs);
   return args;
+}
+
+type HookStage = 'pre' | 'post';
+type HookDef = {
+  kind: 'global' | 'command';
+  stage: HookStage;
+  additionalHookName?: string; // present when kind === 'command'
+  platform?: string;
+  binary?: string;
+  ext: string;
+  file: string; // absolute path
+};
+
+function currentPlatform(): string[] {
+  const platform = process.platform; // 'darwin' | 'linux' | 'win32' | ...
+  if (platform === 'win32') return ['win32', 'windows'];
+  if (platform === 'darwin') return ['darwin', 'macos'];
+  if (platform === 'linux') return ['linux'];
+  return [platform];
+}
+
+function discoverHooks(stage: HookStage, cmd: string | undefined): HookDef[] {
+  const cwd = process.cwd();
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(cwd, { withFileTypes: false }) as unknown as string[];
+  } catch {
+    return [];
+  }
+
+  const platforms = currentPlatform();
+
+  const isCmd = !!cmd;
+  const filePatterns = isCmd
+    ? [
+        /^cmp\.(?<stage>[^.]+)\.(?<cmd>[^.]+)\.(?<ext>[^.]+)$/,
+        /^cmp\.(?<stage>[^.]+)\.(?<cmd>[^.]+)\.(?<platformAndBinary>[^.]+)\.(?<ext>[^.]+)$/,
+      ]
+    : [
+        /^cmp\.(?<stage>[^.]+)\.(?<ext>[^.]+)$/,
+        /^cmp\.(?<stage>[^.]+)\.(?<platformAndBinary>[^.]+)\.(?<ext>[^.]+)$/,
+      ];
+
+  const firstHooks: HookDef[] = [];
+  const secondHooks: HookDef[] = [];
+  const thirdHooks: HookDef[] = [];
+
+  for (const name of entries) {
+    // Only simple filename matching at repo root
+    if (!name.startsWith('cmp.')) continue;
+    let m: RegExpMatchArray | null;
+    let targetArray: HookDef[] | undefined = undefined;
+    if ((m = name.match(filePatterns[0]))) {
+      targetArray = firstHooks;
+    } else if ((m = name.match(filePatterns[1]))) {
+      targetArray = secondHooks;
+    } else if ((m = name.match(filePatterns[2]))) {
+      targetArray = thirdHooks;
+    }
+
+    if (m && targetArray) {
+      const { stage: s, platformAndBinary, ext } = (m.groups || {}) as any;
+      const pnbArr = platformAndBinary?.split('+') || [];
+      let binary: string | undefined = undefined;
+
+      if (s !== stage) continue;
+      if (pnbArr.length > 0 && pnbArr[0].length > 0) {
+        const p = pnbArr[0];
+        if (!platforms.includes(p)) continue;
+      }
+
+      // if binary is specified, it must be non-empty
+      if (pnbArr.length > 1 && pnbArr[1].length > 0) {
+        binary = pnbArr[1];
+      }
+
+      targetArray.push({
+        kind: isCmd ? 'command' : 'global',
+        additionalHookName: cmd,
+        stage,
+        platform: platforms[0],
+        binary,
+        ext,
+        file: path.resolve(cwd, name),
+      });
+    }
+  }
+
+  const hookDefs: HookDef[] = [...firstHooks, ...secondHooks, ...thirdHooks];
+  return hookDefs;
+}
+
+async function runHooks(stage: HookStage, cmd: string | undefined, env: NodeJS.ProcessEnv) {
+  const hooks = discoverHooks(stage, cmd);
+  let exitCode = 0;
+  for (const h of hooks) {
+    const hookEnv = {
+      ...env,
+      CMP_HOOK_EVENT: stage,
+      CMP_HOOK_COMMAND: cmd || '',
+      CMP_HOOK_PLATFORM: h.platform || '',
+      CMP_HOOK_BINARY: h.binary || '',
+      CMP_HOOK_FILE: h.file,
+    } as NodeJS.ProcessEnv;
+
+    const shellCommand = h.binary ? `${h.binary} ${h.file}` : h.file;
+    const code = await runShellCommand(shellCommand, hookEnv);
+    if (code !== 0) {
+      exitCode = code;
+      break;
+    }
+  }
+  return exitCode;
 }
 
 function prepare(composeArgs: string[], options: any) {
@@ -246,194 +358,221 @@ function prepare(composeArgs: string[], options: any) {
     composeBin = foundBin;
   }
 
+  const hooks = (options.cmpHook as string[] | undefined) ?? [];
+
   setProcessEnv(envKey('DETECTED_COMPOSE_BIN', prefix), composeBin);
 
   const args = buildComposeArgs(projectName, envFiles, mergedEnv, profiles, composeArgs || []);
 
-  return { composeBin, args, mergedEnv, storeDir };
+  return { composeBin, args, mergedEnv, storeDir, hooks };
 }
+
+function setupCommand(
+  program: Command,
+  action: (composeArgs: string[], options: any) => Promise<void>,
+) {
+  program
+    .allowUnknownOption(true)
+    .enablePositionalOptions()
+    .option('--cmp-hook <value...>', 'Specify hook scripts to run')
+    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
+    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
+    .option('--cmp-dotenv-prefix <value>', 'Set the dotenv file prefix to detect (default: .env)')
+    .option(
+      '-p, --project-name <value>',
+      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
+    )
+    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
+    .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
+    .action(action);
+  return program;
+}
+
 async function main() {
   const cwd = process.cwd();
   console.log(`compose-plus: cwd=${cwd}, version=${PACKAGE_VERSION}`);
 
   // Setup CLI
-  const program = new Command();
+  let program = new Command();
 
-  program
+  const mainProgram = program
     .name('compose-plus')
     .description(
       'Compose Plus: pass-through wrapper for Docker/Podman Compose with env and helpers',
     )
-    .version(PACKAGE_VERSION)
-    .allowUnknownOption(true)
-    .enablePositionalOptions()
-    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
-    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
-    .option(
-      '--cmp-dotenv-prefix <value>',
-      'Set the dotenv file prefix to detect (default: .env)',
-    )
-    .option(
-      '-p, --project-name <value>',
-      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
-    )
-    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
-    .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
-    .action(async (composeArgs: string[], options) => {
-      const extracted = prepare(composeArgs, options);
-      if (!extracted) return;
-      const { composeBin, args, mergedEnv, storeDir } = extracted;
-      const code = await runCompose(composeBin, args, {
-        ...process.env,
-        // ...mergedEnv,
-      });
-      process.exitCode = code;
+    .version(PACKAGE_VERSION);
+
+  setupCommand(mainProgram, async (composeArgs: string[], options) => {
+    const extracted = prepare(composeArgs, options);
+    if (!extracted) return;
+    const { composeBin, args, mergedEnv, storeDir, hooks } = extracted;
+
+    // Run pre-hooks
+    let code = await runHooks('pre', undefined, mergedEnv);
+    if (code !== 0) return process.exit((process.exitCode = code));
+    for (const h of hooks) {
+      code = await runHooks('pre', h, mergedEnv);
+      if (code !== 0) return process.exit((process.exitCode = code));
+    }
+
+    code = await runCompose(composeBin, args, {
+      ...process.env,
+      // ...mergedEnv,
     });
 
-  program
-    .command('cmp-clean')
-    .allowUnknownOption(true)
-    .enablePositionalOptions()
-    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
-    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
-    .option(
-      '--cmp-dotenv-prefix <value>',
-      'Set the dotenv file prefix to detect (default: .env)',
-    )
-    .option(
-      '-p, --project-name <value>',
-      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
-    )
-    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
-    .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
-    .action(async (composeArgs: string[], options) => {
-      const extracted = prepare(composeArgs, options);
-      if (!extracted) return;
-      const { composeBin, args, mergedEnv, storeDir } = extracted;
+    for (const h of hooks) {
+      const postCode = await runHooks('post', h, mergedEnv);
+      if (postCode !== 0) return process.exit((process.exitCode = postCode));
+    }
+    // Run post-hooks regardless of compose result
+    const postCode = await runHooks('post', undefined, mergedEnv);
+    process.exitCode = postCode !== 0 ? postCode : code;
+  });
 
-      // rm -fsv
-      let code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
-        ...process.env,
-        // ...mergedEnv,
-      });
+  const cmpClean = program.command('cmp-clean');
+  setupCommand(cmpClean, async (composeArgs: string[], options) => {
+    const extracted = prepare(composeArgs, options);
+    if (!extracted) return;
+    const { composeBin, args, mergedEnv, storeDir, hooks } = extracted;
+
+    let code = await runHooks('pre', undefined, mergedEnv);
+    if (code !== 0) return process.exit((process.exitCode = code));
+    for (const h of hooks) {
+      code = await runHooks('pre', h, mergedEnv);
       if (code !== 0) return process.exit((process.exitCode = code));
+    }
 
-      // down --volumes
-      code = await runCompose(composeBin, [...(args || []), 'down', '--volumes'], {
-        ...process.env,
-        // ...mergedEnv,
-      });
-      if (code !== 0) return process.exit((process.exitCode = code));
-
-      // rm -rf ${CMP_STORE_DIR}
-      try {
-        rmSync(storeDir, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
-
-      process.exit(0);
+    // rm -fsv
+    code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
+      ...process.env,
+      // ...mergedEnv,
     });
+    if (code !== 0) return process.exit((process.exitCode = code));
 
-  program
+    // down --volumes
+    code = await runCompose(composeBin, [...(args || []), 'down', '--volumes'], {
+      ...process.env,
+      // ...mergedEnv,
+    });
+    if (code !== 0) return process.exit((process.exitCode = code));
+
+    // rm -rf ${CMP_STORE_DIR}
+    try {
+      rmSync(storeDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+
+    // post hooks
+    for (const h of hooks) {
+      const postCode = await runHooks('post', h, mergedEnv);
+      if (postCode !== 0) return process.exit((process.exitCode = postCode));
+    }
+    const postCode = await runHooks('post', undefined, mergedEnv);
+    if (postCode !== 0) return process.exit((process.exitCode = postCode));
+
+    process.exit(0);
+  });
+
+  const cmpCleanILocal = program
     .command('cmp-clean-i-local')
-    .description('Like cmp-clean and also removes images for services without a custom tag')
-    .allowUnknownOption(true)
-    .enablePositionalOptions()
-    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
-    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
-    .option(
-      '--cmp-dotenv-prefix <value>',
-      'Set the dotenv file prefix to detect (default: .env)',
-    )
-    .option(
-      '-p, --project-name <value>',
-      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
-    )
-    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
-    .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
-    .action(async (composeArgs: string[], options) => {
-      const extracted = prepare(composeArgs, options);
-      if (!extracted) return;
-      const { composeBin, args, mergedEnv, storeDir } = extracted;
+    .description('Like cmp-clean and also removes images for services without a custom tag');
 
-      // rm -fsv
-      let code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
-        ...process.env,
-        // ...mergedEnv,
-      });
+  setupCommand(cmpCleanILocal, async (composeArgs: string[], options) => {
+    const extracted = prepare(composeArgs, options);
+    if (!extracted) return;
+    const { composeBin, args, mergedEnv, storeDir, hooks } = extracted;
+
+    let code = await runHooks('pre', undefined, mergedEnv);
+    if (code !== 0) return process.exit((process.exitCode = code));
+    for (const h of hooks) {
+      code = await runHooks('pre', h, mergedEnv);
       if (code !== 0) return process.exit((process.exitCode = code));
+    }
 
-      // down --rmi local --volumes
-      code = await runCompose(
-        composeBin,
-        [...(args || []), 'down', '--rmi', 'local', '--volumes'],
-        {
-          ...process.env,
-          // ...mergedEnv,
-        },
-      );
-      if (code !== 0) return process.exit((process.exitCode = code));
-
-      // rm -rf ${CMP_STORE_DIR}
-      try {
-        rmSync(storeDir, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
-
-      process.exit(0);
+    // rm -fsv
+    code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
+      ...process.env,
+      // ...mergedEnv,
     });
+    if (code !== 0) return process.exit((process.exitCode = code));
 
-  program
+    // down --rmi local --volumes
+    if (code !== 0) return process.exit((process.exitCode = code));
+    code = await runCompose(composeBin, [...(args || []), 'down', '--rmi', 'local', '--volumes'], {
+      ...process.env,
+      // ...mergedEnv,
+    });
+    if (code !== 0) return process.exit((process.exitCode = code));
+
+    // rm -rf ${CMP_STORE_DIR}
+    try {
+      rmSync(storeDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+
+    // post hooks
+    for (const h of hooks) {
+      const postCode = await runHooks('post', h, mergedEnv);
+      if (postCode !== 0) return process.exit((process.exitCode = postCode));
+    }
+
+    const postCode = await runHooks('post', undefined, mergedEnv);
+    if (postCode !== 0) return process.exit((process.exitCode = postCode));
+
+    process.exit(0);
+  });
+
+  const cmpCleanIAll = program
     .command('cmp-clean-i-all')
-    .description('Like cmp-clean and also removes all images referenced by the services')
-    .allowUnknownOption(true)
-    .enablePositionalOptions()
-    .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
-    .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
-    .option(
-      '--cmp-dotenv-prefix <value>',
-      'Set the dotenv file prefix to detect (default: .env)',
-    )
-    .option(
-      '-p, --project-name <value>',
-      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
-    )
-    .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
-    .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
-    .action(async (composeArgs: string[], options) => {
-      const extracted = prepare(composeArgs, options);
-      if (!extracted) return;
-      const { composeBin, args, mergedEnv, storeDir } = extracted;
+    .description('Like cmp-clean and also removes all images referenced by the services');
 
-      // rm -fsv
-      let code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
-        ...process.env,
-        // ...mergedEnv,
-      });
+  setupCommand(cmpCleanIAll, async (composeArgs: string[], options) => {
+    const extracted = prepare(composeArgs, options);
+    if (!extracted) return;
+    const { composeBin, args, mergedEnv, storeDir, hooks } = extracted;
+
+    // pre hooks
+    let code = await runHooks('pre', undefined, mergedEnv);
+    if (code !== 0) return process.exit((process.exitCode = code));
+    for (const h of hooks) {
+      code = await runHooks('pre', h, mergedEnv);
       if (code !== 0) return process.exit((process.exitCode = code));
+    }
 
-      // down --rmi all --volumes
-      code = await runCompose(
-        composeBin,
-        [...(args || []), 'down', '--rmi', 'all', '--volumes'],
-        {
-          ...process.env,
-          // ...mergedEnv,
-        },
-      );
-      if (code !== 0) return process.exit((process.exitCode = code));
-
-      // rm -rf ${CMP_STORE_DIR}
-      try {
-        rmSync(storeDir, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
-
-      process.exit(0);
+    // rm -fsv
+    code = await runCompose(composeBin, [...(args || []), 'rm', '-fsv'], {
+      ...process.env,
+      // ...mergedEnv,
     });
+    if (code !== 0) return process.exit((process.exitCode = code));
+
+    // down --rmi all --volumes
+    if (code !== 0) return process.exit((process.exitCode = code));
+    code = await runCompose(composeBin, [...(args || []), 'down', '--rmi', 'all', '--volumes'], {
+      ...process.env,
+      // ...mergedEnv,
+    });
+    if (code !== 0) return process.exit((process.exitCode = code));
+
+    // rm -rf ${CMP_STORE_DIR}
+    try {
+      rmSync(storeDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+
+    // post hooks
+    for (const h of hooks) {
+      const postCode = await runHooks('post', h, mergedEnv);
+      if (postCode !== 0) return process.exit((process.exitCode = postCode));
+    }
+    const postCode = await runHooks('post', undefined, mergedEnv);
+    if (postCode !== 0) return process.exit((process.exitCode = postCode));
+
+    process.exit(0);
+  });
 
   await program.parseAsync(process.argv);
 }

@@ -1,0 +1,1 @@
+echo "[cmp.post.sh]"
