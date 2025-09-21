@@ -1,15 +1,15 @@
 # ComposeCat
 
-ComposeCat is a small CLI that generates and runs Docker/Podman Compose commands from your terminal.
+ComposeCat is a lightweight CLI that builds and runs Docker or Podman Compose commands from your terminal.
 
-Use it like your usual compose command — just start with `compose-cat` instead of `docker compose`, `podman compose`, `docker-compose`, or `podman-compose`.
+Use it exactly like your usual compose binary—just start with `compose-cat` instead of `docker compose`, `podman compose`, `docker-compose`, or `podman-compose`.
 
 Highlights:
 
 - Compose binary auto-detection with sensible defaults: `docker compose`, `podman compose`, `docker-compose`, `podman-compose`. You can override or reorder candidates via `--cmp-bin` or `CMP_COMPOSE_BIN`.
-- Profile-aware dotenv loading with support for local-only overrides via `.env.local`. When profiles are provided, ComposeCat loads: `.env`, `.env.local`, `.env.<PROFILE>`, `.env.<PROFILE>.local`.
-- Project naming via `-p/--project-name` or `CMP_PROJECT_NAME`. Use different project names per profile if needed.
-- Standardized data directories via environment variables: `CMP_DATA_BASE_DIR`, `CMP_INJECT_DIR`, `CMP_STORE_DIR`.
+- Profile-aware dotenv loading with support for local-only overrides via `.env.local`. When you specify profiles (`--profile dev`), ComposeCat loads: `.env`, `.env.local`, `.env.<PROFILE>`, `.env.<PROFILE>.local`.
+- Project naming via `-p/--project-name` or `CMP_PROJECT_NAME`, with the option to vary by profile.
+- Standardized data directories controlled by environment variables: `CMP_DATA_BASE_DIR`, `CMP_INJECT_DIR`, `CMP_STORE_DIR`.
 - Built-in cleanup commands: `cmp-clean`, `cmp-clean-i-local`, and `cmp-clean-i-all`.
 - Pluggable pre/post hooks with per-command, per-platform, and per-binary variants.
 
@@ -21,35 +21,23 @@ Install globally with npm:
 npm install -g compose-cat
 ```
 
-Or install locally as a devDependency to use inside your project:
+Add as a devDependency inside a project:
 
 ```sh
 npm install --save-dev compose-cat
 ```
 
-Also you can run with npx:
+Run ad-hoc with npx:
 
 ```sh
-npx compose-cat <COMPOSE_COMMAND> [OPTIONS]
+npx compose-cat <COMPOSE_COMMAND> [ARGS]
 ```
 
 Examples:
 
-Usage:
-
 ```sh
-compose-cat <COMPOSE_COMMAND> [OPTIONS]
-```
-
-Bring services up:
-
-```sh
+compose-cat <COMPOSE_COMMAND> [ARGS]
 compose-cat up -d
-```
-
-Stop and remove services:
-
-```sh
 compose-cat down
 ```
 
@@ -72,23 +60,27 @@ compose-cat down
   - `${CMP_DETECTED_COMPOSE_BIN} down --volumes`
   - `rm -rf ${CMP_STORE_DIR}`
 
-- `cmp-clean-i-local`: Like `cmp-clean`, and also removes images referenced by services that don’t have a custom tag.
+- `cmp-clean-i-local`: Like `cmp-clean`, but also removes images referenced by services that do not have a custom tag.
   - `${CMP_DETECTED_COMPOSE_BIN} rm -fsv`
   - `${CMP_DETECTED_COMPOSE_BIN} down --rmi local --volumes`
   - `rm -rf ${CMP_STORE_DIR}`
 
-- `cmp-clean-i-all`: Like `cmp-clean`, and also removes all images referenced by the services.
+- `cmp-clean-i-all`: Like `cmp-clean`, but also removes every image referenced by the services.
   - `${CMP_DETECTED_COMPOSE_BIN} rm -fsv`
   - `${CMP_DETECTED_COMPOSE_BIN} down --rmi all --volumes`
   - `rm -rf ${CMP_STORE_DIR}`
 
+Caution:
+
+Pass ComposeCat options (such as `--profile` or `-p`) immediately after the built-in command. For example: `compose-cat cmp-clean --profile main -p my-project`.
+
 ## How It Works
 
-1. Read CLI options (including profiles, project name, and prefix overrides).
+1. Read CLI options, including profiles, project name, and prefix overrides.
 2. Determine the environment variable prefix from `--cmp-prefix` or `COMPOSE_CAT_PREFIX` (default: `CMP_`).
 3. Determine the dotenv prefix from `--cmp-dotenv-prefix` or `COMPOSE_CAT_DOTENV_PREFIX` (default: `.env`).
-4. Load dotenv files: `.env`, `.env.local`, and for each profile: `.env.<PROFILE>`, `.env.<PROFILE>.local`.
-5. Detect the compose binary from `CMP_COMPOSE_BIN` (if set) or probe defaults; you can override the order with `--cmp-bin`.
+4. Load dotenv files: `.env`, `.env.local`, and for each CLI profile: `.env.<PROFILE>`, `.env.<PROFILE>.local`.
+5. Detect the compose binary from `CMP_COMPOSE_BIN` (if set) or probe defaults; override the order with `--cmp-bin`.
 6. Build the compose command: add `--env-file` flags, `--profile` flags, and `-p/--project-name` when provided.
 7. Run matching pre-hooks.
 8. Execute the compose command and capture its exit code.
@@ -96,15 +88,15 @@ compose-cat down
 
 ## Special Flow for Cleanup Commands
 
-The cleanup commands follow the general flow, but expand to multiple compose commands executed in sequence (see “Commands” above for exact arguments), followed by removing `${CMP_STORE_DIR}` on the host.
+Cleanup commands follow the general flow, but expand to multiple compose commands executed in sequence (see “Commands” above for exact arguments). After the compose commands finish, ComposeCat removes `${CMP_STORE_DIR}` on the host.
 
 ## Environment Variables
 
-You can set these environment variables to control detection and defaults.
+Configure these environment variables to control detection and defaults.
 
 ### `COMPOSE_CAT_PREFIX`
 
-- Sets the prefix for all ComposeCat–related environment variables.
+- Sets the prefix for all ComposeCat-related environment variables.
 - Default: `CMP_`
 - Example: `COMPOSE_CAT_PREFIX=MyPrefix_` yields variables like `MyPrefix_COMPOSE_BIN` instead of `CMP_COMPOSE_BIN`.
 
@@ -115,7 +107,7 @@ You can set these environment variables to control detection and defaults.
 
 ## ComposeCat Environment Variables
 
-All listed variables use the active prefix (default `CMP_`).
+All variables in this section use the active prefix (default `CMP_`).
 
 ### `CMP_COMPOSE_BIN`
 
@@ -128,12 +120,12 @@ All listed variables use the active prefix (default `CMP_`).
 
 ### `CMP_DETECTED_COMPOSE_BIN`
 
-- Set by ComposeCat to the compose binary that was selected at runtime.
+- Set by ComposeCat to the compose binary selected at runtime.
 
 ### `CMP_PROJECT_NAME`
 
-- If `-p/--project-name` is provided, this variable is ignored.
-- Otherwise, if set, it is passed as `-p, --project-name ${CMP_PROJECT_NAME}` to compose.
+- Ignored when `-p/--project-name` is provided.
+- Otherwise, when set, ComposeCat forwards it as `-p, --project-name ${CMP_PROJECT_NAME}`.
 - Useful for selecting per-profile project names.
 
 ### `CMP_BASE_DIR`
@@ -162,7 +154,7 @@ All listed variables use the active prefix (default `CMP_`).
 
 ComposeCat discovers dotenv files at startup and adds them to the compose command as `--env-file` flags.
 
-The following files are used if present:
+The following files are considered when present:
 
 - Base files:
   - `.env`
@@ -176,7 +168,7 @@ The dotenv file prefix is configurable via `--cmp-dotenv-prefix` or `COMPOSE_CAT
 
 ## Hooks
 
-You can integrate hook scripts that run before and after the compose command. ComposeCat searches for hook files in the current working directory and supports per-command, per-platform, and per-binary variants.
+Hook scripts can run before and after the compose command. ComposeCat searches for hook files in the current working directory and supports per-command, per-platform, and per-binary variants.
 
 File name patterns (where `stage` is `pre` or `post`):
 
@@ -189,7 +181,7 @@ File name patterns (where `stage` is `pre` or `post`):
 
 Where:
 
-- `HOOK`: Hook name provided via the `--cmp-hook` argument (e.g., `up`).
+- `HOOK`: Name provided via the `--cmp-hook` argument (e.g., `up`).
 - `PLATFORM`: Target platform. Use `win32` or `windows` for Windows, `darwin` or `macos` for macOS, and `linux` for Linux.
 - `BINARY`: Executable used to run the script (e.g., `bash`, `sh`, `pwsh`, `node`). If omitted, the file itself is executed. Ensure it is executable or includes a shebang.
 - `EXT`: File extension (e.g., `sh`, `ps1`, `js`).
@@ -223,11 +215,11 @@ Examples when running with `--cmp-hook=up` (if present, these may execute):
 
 Environment variables exposed to hooks:
 
-- `CMP_HOOK_EVENT`: The stage (`pre` or `post`).
-- `CMP_HOOK_COMMAND`: The hook name when `--cmp-hook` is provided; otherwise empty.
-- `CMP_HOOK_PLATFORM`: The matched platform string, if any.
-- `CMP_HOOK_BINARY`: The matched binary string, if any.
-- `CMP_HOOK_FILE`: The absolute path of the hook file being executed.
+- `CMP_HOOK_EVENT`: Stage (`pre` or `post`).
+- `CMP_HOOK_COMMAND`: Hook name when `--cmp-hook` is provided; otherwise empty.
+- `CMP_HOOK_PLATFORM`: Matched platform string, if any.
+- `CMP_HOOK_BINARY`: Matched binary string, if any.
+- `CMP_HOOK_FILE`: Absolute path of the hook file being executed.
 
 ## Notes
 
