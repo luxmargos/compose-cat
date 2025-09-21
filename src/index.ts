@@ -17,11 +17,11 @@ const DEFAULT_DOTENV_PREFIX = '.env';
 let prefixFromOptions: string | undefined = undefined;
 let dotenvPrefixFromOptions: string | undefined = undefined;
 function getPrefix(): string {
-  return prefixFromOptions || process.env.COMPOSE_PLUS_PREFIX || DEFAULT_PREFIX;
+  return prefixFromOptions || process.env.COMPOSE_CAT_PREFIX || DEFAULT_PREFIX;
 }
 
 function getDotenvPrefix(): string {
-  return dotenvPrefixFromOptions || process.env.COMPOSE_PLUS_DOTENV_PREFIX || DEFAULT_DOTENV_PREFIX;
+  return dotenvPrefixFromOptions || process.env.COMPOSE_CAT_DOTENV_PREFIX || DEFAULT_DOTENV_PREFIX;
 }
 
 function envKey(
@@ -180,7 +180,7 @@ function shellQuote(s: string): string {
 
 function checkBinOrThrow(value: string | undefined, candidates: string[]) {
   if (!value) {
-    console.error('compose-plus: No compose binary detected. Tried:', candidates.join(' | '));
+    console.error('compose-cat: No compose binary detected. Tried:', candidates.join(' | '));
     process.exitCode = 1;
     return false;
   }
@@ -390,16 +390,14 @@ function setupCommand(
 
 async function main() {
   const cwd = process.cwd();
-  console.log(`compose-plus: cwd=${cwd}, version=${PACKAGE_VERSION}`);
+  console.log(`compose-cat: cwd=${cwd}, version=${PACKAGE_VERSION}`);
 
   // Setup CLI
   let program = new Command();
 
   const mainProgram = program
-    .name('compose-plus')
-    .description(
-      'Compose Plus: pass-through wrapper for Docker/Podman Compose with env and helpers',
-    )
+    .name('compose-cat')
+    .description('ComposeCat: pass-through wrapper for Docker/Podman Compose with env and helpers')
     .version(PACKAGE_VERSION);
 
   setupCommand(mainProgram, async (composeArgs: string[], options) => {

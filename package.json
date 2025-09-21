@@ -1,7 +1,7 @@
 {
-  "name": "compose-plus",
+  "name": "compose-cat",
   "version": "0.1.2",
-  "description": "Compose Plus: a small CLI that generates and runs Docker/Podman Compose commands",
+  "description": "ComposeCat: a small CLI that generates and runs Docker/Podman Compose commands",
   "private": false,
   "type": "module",
   "author": {
@@ -10,10 +10,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/luxmargos/compose-plus.git"
+    "url": "git+https://github.com/luxmargos/compose-cat.git"
   },
   "bin": {
-    "compose-plus": "dist/index.js"
+    "compose-cat": "dist/index.js"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",

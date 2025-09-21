@@ -4,14 +4,14 @@
   "main": "index.js",
   "scripts": {
     "test": "tsx ../src/index.ts",
-    "helptest": "compose-plus --help"
+    "helptest": "compose-cat --help"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "devDependencies": {
-    "compose-plus": "file:..",
+    "compose-cat": "file:..",
     "tsx": "^4.20.5"
   }
 }
