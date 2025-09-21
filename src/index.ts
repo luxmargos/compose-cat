@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, rmSync, readdirSync, rmdirSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseDotenv, populate } from 'dotenv';
 import packageJson from '../package.json' with { type: 'json' };
@@ -457,8 +457,9 @@ async function main() {
     // rm -rf ${CMP_STORE_DIR}
     try {
       rmSync(storeDir, { recursive: true, force: true });
-    } catch {
+    } catch (e) {
       // ignore
+      console.error('Error removing store dir:', e);
     }
 
     // post hooks

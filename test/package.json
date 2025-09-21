@@ -4,6 +4,9 @@
   "main": "index.js",
   "scripts": {
     "test": "tsx ../src/index.ts",
+    "up": "npm run test -- --profile=debug up -d",
+    "down": "npm run test -- --profile=debug down",
+    "clean": "npm run test -- cmp-clean --profile=debug",
     "helptest": "compose-cat --help"
   },
   "keywords": [],
