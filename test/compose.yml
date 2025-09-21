@@ -16,6 +16,8 @@ services:
   whoami2:
     image: traefik/whoami
     container_name: cmp-whoami2
+    volumes:
+      - whoami-data:/data
 
   redis:
     image: redis:7-alpine
@@ -25,3 +27,7 @@ services:
       - '${CMP_STORE_DIR}/redis:/data'
     profiles:
       - debug
+
+volumes:
+  whoami-data:
+    name: cmp-whoami-data
