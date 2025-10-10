@@ -22,7 +22,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "postinstall": "npm run build",
+    "prepublishOnly": "npm test && npm run build",
     "build": "npm run build:prod",
     "build:dev": "npm test && cross-env BUILD_MODE=development tsup",
     "build:prod": "npm test && cross-env BUILD_MODE=production tsup",
