@@ -1,6 +1,6 @@
 {
   "name": "compose-cat",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "ComposeCat: a small CLI that generates and runs Docker/Podman Compose commands",
   "private": false,
   "type": "module",
