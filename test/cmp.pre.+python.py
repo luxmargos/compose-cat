@@ -1,0 +1,1 @@
+print("[cmp.pre.+python.py]")

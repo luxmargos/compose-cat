@@ -219,6 +219,38 @@ function buildComposeArgs(
   return args;
 }
 
+function setProfileEnvVariables(profiles: string[], mergedEnv: StringMap, prefix: string) {
+  const profileKeyPrefix = `${prefix}PROFILE_`;
+  const profilesKey = `${prefix}PROFILES`;
+
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(profileKeyPrefix)) {
+      delete process.env[key];
+    }
+  }
+  for (const key of Object.keys(mergedEnv)) {
+    if (key.startsWith(profileKeyPrefix)) {
+      delete mergedEnv[key];
+    }
+  }
+
+  if (profiles.length === 0) {
+    delete process.env[profilesKey];
+    delete mergedEnv[profilesKey];
+    return;
+  }
+
+  const joinedProfiles = profiles.join(',');
+  setProcessEnv(profilesKey, joinedProfiles);
+  mergedEnv[profilesKey] = joinedProfiles;
+
+  profiles.forEach((profile, index) => {
+    const key = `${profileKeyPrefix}${index + 1}`;
+    setProcessEnv(key, profile);
+    mergedEnv[key] = profile;
+  });
+}
+
 type HookStage = 'pre' | 'post';
 type HookDef = {
   kind: 'global' | 'command';
@@ -341,6 +373,7 @@ function prepare(composeArgs: string[], options: any) {
   dotenvPrefixFromOptions = options.cmpDotenvPrefix as string | undefined;
 
   const prefix = getPrefix();
+  setProfileEnvVariables(profiles, mergedEnv, prefix);
   const userBins: string[] = Array.isArray(options.cmpBin) ? (options.cmpBin as string[]) : [];
   const envBins = parseCsv(mergedEnv[envKey('COMPOSE_BIN', prefix)]);
   let composeBin = '';

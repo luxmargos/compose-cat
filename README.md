@@ -128,6 +128,16 @@ All variables in this section use the active prefix (default `CMP_`).
 - Otherwise, when set, ComposeCat forwards it as `-p, --project-name ${CMP_PROJECT_NAME}`.
 - Useful for selecting per-profile project names.
 
+### `CMP_PROFILES`
+
+- Set by ComposeCat to the list of active profiles joined by commas, e.g., `main,sub_1`.
+- Empty when no profile is selected via CLI options.
+
+### `CMP_PROFILE_<N>`
+
+- Set by ComposeCat for each active profile using a 1-based index, e.g., `CMP_PROFILE_1=main`.
+- Cleared when no profiles are active so stale values do not persist between runs.
+
 ### `CMP_BASE_DIR`
 
 - Base directory for project-relative operations.
