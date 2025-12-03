@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { spawn, spawnSync } from 'node:child_process';
+import { execSync, spawn, spawnSync } from 'node:child_process';
 import { readFileSync, existsSync, mkdirSync, rmSync, readdirSync, rmdirSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseDotenv, populate } from 'dotenv';
@@ -9,21 +9,24 @@ type StringMap = Record<string, string>;
 
 const PACKAGE_VERSION = packageJson.version;
 
+// Compose binary names in the order we try them when the user does not specify one.
 const defaultBins = ['docker compose', 'podman compose', 'docker-compose', 'podman-compose'];
 
-const DEFAULT_PREFIX = 'CMP_';
+const DEFAULT_PREFIX = 'CMPCAT_';
 const DEFAULT_DOTENV_PREFIX = '.env';
 
 let prefixFromOptions: string | undefined = undefined;
 let dotenvPrefixFromOptions: string | undefined = undefined;
 function getPrefix(): string {
-  return prefixFromOptions || process.env.COMPOSE_CAT_PREFIX || DEFAULT_PREFIX;
+  return prefixFromOptions || process.env.CMPCAT_ARG_PREFIX || DEFAULT_PREFIX;
 }
 
 function getDotenvPrefix(): string {
-  return dotenvPrefixFromOptions || process.env.COMPOSE_CAT_DOTENV_PREFIX || DEFAULT_DOTENV_PREFIX;
+  return dotenvPrefixFromOptions || process.env.CMPCAT_ARG_DOTENV_PREFIX || DEFAULT_DOTENV_PREFIX;
 }
 
+// Resolve the env variable name with the current CMP_ prefix so we do not have to repeat
+// interpolation logic everywhere.
 function envKey(
   key:
     | 'BASE_DIR'
@@ -32,12 +35,19 @@ function envKey(
     | 'STORE_DIR'
     | 'COMPOSE_BIN'
     | 'PROJECT_NAME'
-    | 'DETECTED_COMPOSE_BIN',
+    | 'DETECTED_COMPOSE_BIN'
+    | 'HOOK_EVENT'
+    | 'HOOK_COMMAND'
+    | 'HOOK_PLATFORM'
+    | 'HOOK_BINARY'
+    | 'HOOK_FILE',
   prefix = getPrefix(),
 ) {
   return `${prefix}${key}`;
 }
 
+// Load a dotenv file into the provided `base` object, returning the mutated reference. We keep the
+// function defensive because hooks may reference optional files.
 function mergeEnv(base: any, file: string): StringMap {
   try {
     const content = readFileSync(file, 'utf8');
@@ -62,7 +72,14 @@ function normalizeProfiles(values?: string[] | string): string[] {
   return out;
 }
 
-function detectDotenvFilesAndEnv(profileFromCli?: string[] | string): {
+/**
+ * Detect which dotenv files are applicable and merge them to a single env object. CLI supplied
+ * profiles override everything else, which allows per-profile .env overrides to kick in later.
+ */
+function detectDotenvFilesAndEnv(
+  profileFromCli?: string[] | string,
+  options?: { disableProfileBasedDotenv?: boolean },
+): {
   envFiles: string[];
   mergedEnv: StringMap;
   profiles: string[];
@@ -70,14 +87,14 @@ function detectDotenvFilesAndEnv(profileFromCli?: string[] | string): {
   // Start with defaults; allow OS env to change prefix and dotenv prefix.
   const dotenvPrefix = getDotenvPrefix();
 
-  const baseFiles = [
+  const baseDotenvFiles = [
     path.resolve(process.cwd(), `${dotenvPrefix}`),
     path.resolve(process.cwd(), `${dotenvPrefix}.local`),
   ];
 
   // Load base files to possibly discover PROFILE from them as well.
   const baseMerged = JSON.parse(JSON.stringify(process.env ?? {})) as StringMap;
-  for (const f of baseFiles) {
+  for (const f of baseDotenvFiles) {
     if (!existsSync(f)) continue;
     mergeEnv(baseMerged, f);
   }
@@ -89,23 +106,25 @@ function detectDotenvFilesAndEnv(profileFromCli?: string[] | string): {
     profiles = cliProfiles;
   }
 
-  const profileFiles: string[] = [];
-  for (const p of profiles) {
-    profileFiles.push(
-      path.resolve(process.cwd(), `${dotenvPrefix}.${p}`),
-      path.resolve(process.cwd(), `${dotenvPrefix}.${p}.local`),
-    );
+  const profileDotenvFiles: string[] = [];
+
+  if (!options?.disableProfileBasedDotenv) {
+    for (const p of profiles) {
+      profileDotenvFiles.push(
+        path.resolve(process.cwd(), `${dotenvPrefix}.${p}`),
+        path.resolve(process.cwd(), `${dotenvPrefix}.${p}.local`),
+      );
+    }
   }
 
-  const allFiles = [...baseFiles, ...profileFiles].filter((f) => existsSync(f));
+  const allDotenvFiles = [...baseDotenvFiles, ...profileDotenvFiles].filter((f) => existsSync(f));
 
   // Merge env in order; later files override earlier ones.
-  const merged: StringMap = {};
-  for (const f of allFiles) {
+  for (const f of allDotenvFiles) {
     mergeEnv(baseMerged, f);
   }
 
-  return { envFiles: allFiles, mergedEnv: baseMerged, profiles: profiles };
+  return { envFiles: allDotenvFiles, mergedEnv: baseMerged, profiles: profiles };
 }
 
 function parseCsv(value?: string): string[] {
@@ -129,6 +148,10 @@ function detectComposeBin(candidates: string[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Guarantee the directories compose-cat expects (inject/store) exist and expose their absolute
+ * paths through both the merged env and process.env for downstream commands.
+ */
 function ensureDataDirs(env: StringMap): {
   baseDir: string;
   dataBaseDir: string;
@@ -153,6 +176,8 @@ function ensureDataDirs(env: StringMap): {
   return { baseDir, dataBaseDir, injectDir, storeDir };
 }
 
+// Thin wrapper around spawn that resolves with an exit code so hooks/compose invocations share the
+// same logging and error handling surface.
 async function runShellCommand(cmd: string, env: NodeJS.ProcessEnv): Promise<number> {
   return new Promise((resolve) => {
     console.log(`[RUNNING] ${cmd}`);
@@ -193,19 +218,12 @@ function setProcessEnv(key: string, value: string) {
 }
 
 function buildComposeArgs(
-  projectNameFromArg: string | undefined,
   envFiles: string[],
   mergedEnv: StringMap,
   profiles: string[],
   extraArgs: string[],
 ): string[] {
   const args: string[] = [];
-  const prefix = getPrefix();
-  const projectName = projectNameFromArg || mergedEnv[envKey('PROJECT_NAME', prefix)] || '';
-  if (projectName) {
-    setProcessEnv(envKey('PROJECT_NAME', prefix), projectName);
-    args.push('-p', projectName);
-  }
 
   for (const p of profiles) {
     args.push('--profile', p);
@@ -270,6 +288,10 @@ function currentPlatform(): string[] {
   return [platform];
 }
 
+/**
+ * Scan the working directory for hook scripts following the cmp.* naming convention and return the
+ * ones that apply to the requested stage (and optional command specific hook).
+ */
 function discoverHooks(stage: HookStage, cmd: string | undefined): HookDef[] {
   const cwd = process.cwd();
   let entries: string[] = [];
@@ -341,17 +363,19 @@ function discoverHooks(stage: HookStage, cmd: string | undefined): HookDef[] {
   return hookDefs;
 }
 
+// Execute hooks sequentially, short-circuiting on the first non-zero exit code so users can rely on
+// hooks for guard rails.
 async function runHooks(stage: HookStage, cmd: string | undefined, env: NodeJS.ProcessEnv) {
   const hooks = discoverHooks(stage, cmd);
   let exitCode = 0;
   for (const h of hooks) {
     const hookEnv = {
       ...env,
-      CMP_HOOK_EVENT: stage,
-      CMP_HOOK_COMMAND: cmd || '',
-      CMP_HOOK_PLATFORM: h.platform || '',
-      CMP_HOOK_BINARY: h.binary || '',
-      CMP_HOOK_FILE: h.file,
+      [`${envKey('HOOK_EVENT', getPrefix())}`]: stage,
+      [`${envKey('HOOK_COMMAND', getPrefix())}`]: cmd || '',
+      [`${envKey('HOOK_PLATFORM', getPrefix())}`]: h.platform || '',
+      [`${envKey('HOOK_BINARY', getPrefix())}`]: h.binary || '',
+      [`${envKey('HOOK_FILE', getPrefix())}`]: h.file,
     } as NodeJS.ProcessEnv;
 
     const shellCommand = h.binary ? `${h.binary} ${h.file}` : h.file;
@@ -364,9 +388,14 @@ async function runHooks(stage: HookStage, cmd: string | undefined, env: NodeJS.P
   return exitCode;
 }
 
+/**
+ * Central orchestration step: resolve env files, profiles, directories, compose binary, hooks and
+ * compose arguments so both the default and cmp-clean* commands behave consistently.
+ */
 function prepare(composeArgs: string[], options: any) {
-  const projectName = options.projectName as string | undefined;
-  const { envFiles, mergedEnv, profiles } = detectDotenvFilesAndEnv(options.profile);
+  // console.log('##########################');
+  // execSync('env', { stdio: 'inherit' });
+  const { envFiles, mergedEnv, profiles } = detectDotenvFilesAndEnv(options.profile, options);
   const { storeDir } = ensureDataDirs(mergedEnv);
 
   prefixFromOptions = options.cmpPrefix as string | undefined;
@@ -374,6 +403,10 @@ function prepare(composeArgs: string[], options: any) {
 
   const prefix = getPrefix();
   setProfileEnvVariables(profiles, mergedEnv, prefix);
+  // console.log('##########################');
+  // execSync('env', { stdio: 'inherit' });
+
+  // find compose binary
   const userBins: string[] = Array.isArray(options.cmpBin) ? (options.cmpBin as string[]) : [];
   const envBins = parseCsv(mergedEnv[envKey('COMPOSE_BIN', prefix)]);
   let composeBin = '';
@@ -395,11 +428,25 @@ function prepare(composeArgs: string[], options: any) {
 
   setProcessEnv(envKey('DETECTED_COMPOSE_BIN', prefix), composeBin);
 
-  const args = buildComposeArgs(projectName, envFiles, mergedEnv, profiles, composeArgs || []);
+  const args = buildComposeArgs(envFiles, mergedEnv, profiles, composeArgs || []);
+
+  // Predefine COMPOSE_ variables for consistency
+  for (const key in mergedEnv) {
+    if (key.startsWith('COMPOSE_')) {
+      process.env[key] = mergedEnv[key];
+    }
+  }
+
+  // console.log('##########################');
+  // console.log(mergedEnv);
+  // console.log('##########################');
+  // execSync('env', { stdio: 'inherit' });
 
   return { composeBin, args, mergedEnv, storeDir, hooks };
 }
 
+// Attach shared CLI options and the action callback to a commander Command instance. Every entry
+// point (default and cmp-clean*) calls this so we keep flag parsing identical.
 function setupCommand(
   program: Command,
   action: (composeArgs: string[], options: any) => Promise<void>,
@@ -411,16 +458,17 @@ function setupCommand(
     .option('--cmp-bin <value...>', 'Provide compose binary candidates in priority order')
     .option('--cmp-prefix <value>', 'Set the environment variable prefix (default: CMP_)')
     .option('--cmp-dotenv-prefix <value>', 'Set the dotenv file prefix to detect (default: .env)')
-    .option(
-      '-p, --project-name <value>',
-      'Compose project name (overrides CMP_PROJECT_NAME). You can also set CMP_PROJECT_NAME to persist it or vary by profile.',
-    )
     .option('--profile <value...>', 'Profiles to use (comma-separated or repeat the flag)')
+    .option(
+      '--disable-profile-based-dotenv',
+      'This disables automatic .env file detection based on profile names. (enabled by default).',
+    )
     .argument('[composeArgs...]', 'Compose subcommand and options to pass through')
     .action(action);
   return program;
 }
 
+// CLI bootstrap: define commands, wire hooks, and pass everything to Commander.
 async function main() {
   const cwd = process.cwd();
   console.log(`compose-cat: cwd=${cwd}, version=${PACKAGE_VERSION}`);
