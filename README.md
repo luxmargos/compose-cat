@@ -4,20 +4,14 @@ ComposeCat is a lightweight CLI that builds and runs Docker or Podman Compose co
 
 Use it exactly like your usual compose binary—just start with `compose-cat` instead of `docker compose`, `podman compose`, `docker-compose`, or `podman-compose`.
 
-Highlights:
+## Highlights
 
-- Compose binary auto-detection with sensible defaults: `docker compose`, `podman compose`, `docker-compose`, `podman-compose`. You can override or reorder candidates via `--cmp-bin` or `CMPCAT_COMPOSE_BIN`.
-- Profile-aware dotenv loading with support for local-only overrides via `.env.local`. When you specify profiles (`--profile dev`), ComposeCat loads: `.env`, `.env.local`, `.env.<PROFILE>`, `.env.<PROFILE>.local`.
-- Project naming via `-p/--project-name` or `COMPOSE_PROJECT_NAME`, with the option to vary by profile.
-- Standardized data directories controlled by environment variables: `CMPCAT_DATA_BASE_DIR`, `CMPCAT_INJECT_DIR`, `CMPCAT_STORE_DIR`.
-- Built-in cleanup commands: `cmp-clean`, `cmp-clean-i-local`, and `cmp-clean-i-all`.
-- Pluggable pre/post hooks with per-command, per-platform, and per-binary variants.
-
-## Core Features
-
-1. **Dotenv layering** – ComposeCat always reads the base `.env` file and, when present, `.env.local` so you can keep local overrides out of version control.
-2. **Profile-aware dotenv discovery** – Supplying `--profile foo` tells ComposeCat to also load `.env.foo` and `.env.foo.local`, ensuring each profile gets a dedicated set of overrides.
-3. **COMPOSE\_\* priming** – Before invoking the underlying compose binary, ComposeCat preloads matching `COMPOSE_*` environment variables so Docker/Podman Compose receives every setting defined in your dotenv files without extra flags.
+- **Compose binary auto-detection** – Probes `docker compose`, `podman compose`, `docker-compose`, and `podman-compose` (override or reorder via `--cmp-bin` or `CMPCAT_COMPOSE_BIN`).
+- **Dotenv layering & profiles** – Always loads `.env`, `.env.local`, and, when profiles are provided, `.env.<PROFILE>`/`.env.<PROFILE>.local` unless `--disable-profile-based-dotenv` is supplied.
+- **COMPOSE\_\* priming** – Values detected in dotenv files automatically populate `COMPOSE_*` variables (e.g., `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `COMPOSE_PROFILES`) before the compose command runs.
+- **Standardized data directories** – Expose reusable paths via `CMPCAT_DATA_BASE_DIR`, `CMPCAT_INJECT_DIR`, and `CMPCAT_STORE_DIR`.
+- **Cleanup helpers** – `cmp-clean`, `cmp-clean-i-local`, and `cmp-clean-i-all` encapsulate common teardown flows.
+- **Pluggable hooks** – Run pre/post scripts with per-command, per-platform, and per-binary variants to enforce custom workflows.
 
 ## Quick Start
 
@@ -52,13 +46,14 @@ compose-cat down
 - `--cmp-hook <value...>`: Hook names to run (pre and post). Example: `--cmp-hook up` runs matching `cmp.pre.up.*` and `cmp.post.up.*` hooks.
 - `--cmp-bin <value...>`: Provide compose binary candidates in priority order.
   - Example: `--cmp-bin "podman compose" --cmp-bin "docker compose"`.
-  - Also configurable via `CMPCAT_PREFIX`.
-- `--cmp-prefix <value>`: Set the environment variable prefix (default: `CMPCAT_`).
-  - Also configurable via `CMPCAT_PREFIX`.
+  - Also configurable via `CMPCAT_COMPOSE_BIN`.
+- `--cmp-prefix <value>`: Set the ComposeCat environment variable prefix (default: `CMPCAT_`).
+  - Also configurable via `CMPCAT_ARG_PREFIX`.
 - `--cmp-dotenv-prefix <value>`: Set the dotenv file prefix to detect (default: `.env`).
-  - Also configurable via `CMPCAT_DOTENV_PREFIX`.
+  - Also configurable via `CMPCAT_ARG_DOTENV_PREFIX`.
 - `-p, --project-name <value>`: Compose project name (overrides `COMPOSE_PROJECT_NAME`).
 - `--profile <value...>`: Profiles to use (comma-separated or repeat the flag), e.g., `--profile dev` or `--profile dev,test`.
+- `--disable-profile-based-dotenv`: Skip loading `.env.<PROFILE>` and `.env.<PROFILE>.local` files even when profiles are provided.
 
 ## Commands
 
@@ -83,15 +78,16 @@ Pass ComposeCat options (such as `--profile` or `-p`) immediately after the buil
 
 ## How It Works
 
-1. Read CLI options, including profiles, project name, and prefix overrides.
-2. Determine the environment variable prefix from `--cmp-prefix` or `COMPOSE_CAT_PREFIX` (default: `CMPCAT_`).
-3. Determine the dotenv prefix from `--cmp-dotenv-prefix` or `COMPOSE_CAT_DOTENV_PREFIX` (default: `.env`).
-4. Load dotenv files: `.env`, `.env.local`, and for each CLI profile: `.env.<PROFILE>`, `.env.<PROFILE>.local`.
+1. Read CLI options, including profiles, project name, prefix overrides, and dotenv preferences.
+2. Determine the environment variable prefix from `--cmp-prefix` or `CMPCAT_ARG_PREFIX` (default: `CMPCAT_`).
+3. Determine the dotenv prefix from `--cmp-dotenv-prefix` or `CMPCAT_ARG_DOTENV_PREFIX` (default: `.env`).
+4. Load base dotenv files (`.env`, `.env.local`). If profile-based detection is enabled, also load `.env.<PROFILE>` and `.env.<PROFILE>.local` for each CLI profile.
 5. Detect the compose binary from `CMPCAT_COMPOSE_BIN` (if set) or probe defaults; override the order with `--cmp-bin`.
-6. Build the compose command: add `--env-file` flags, `--profile` flags, and `-p/--project-name` when provided.
-7. Run matching pre-hooks.
-8. Execute the compose command and capture its exit code.
-9. Run matching post-hooks and exit with the final status code.
+6. Prime `COMPOSE_*` environment variables with any values discovered in dotenv files.
+7. Build the compose command: add `--env-file` flags, `--profile` flags, and `-p/--project-name` when provided.
+8. Run matching pre-hooks.
+9. Execute the compose command and capture its exit code.
+10. Run matching post-hooks and exit with the final status code.
 
 ## Special Flow for Cleanup Commands
 
@@ -175,11 +171,11 @@ The following files are considered when present:
   - `.env`
   - `.env.local`
 
-- Profile files (each `<PROFILE>` comes from `--profile`):
+- Profile files (each `<PROFILE>` comes from `--profile`, unless `--disable-profile-based-dotenv` is used):
   - `.env.<PROFILE>`
   - `.env.<PROFILE>.local`
 
-The dotenv file prefix is configurable via `--cmp-dotenv-prefix` or `COMPOSE_CAT_DOTENV_PREFIX`.
+The dotenv file prefix is configurable via `--cmp-dotenv-prefix` or `CMPCAT_ARG_DOTENV_PREFIX`.
 
 ## Hooks
 

@@ -24,7 +24,7 @@ services:
     container_name: cmp-redis
     command: ['redis-server', '--appendonly', 'yes']
     volumes:
-      - '${CMP_STORE_DIR}/redis:/data'
+      - '${CMPCAT_STORE_DIR}/redis:/data'
     profiles:
       - debug
 
