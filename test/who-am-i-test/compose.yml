@@ -1,6 +1,5 @@
 ## Simple docker compose services for compose-plus
-# This file uses environment-driven paths described in README.
-# It binds data under CMP_STORE_DIR so `cmp-clean` can remove it easily.
+# This file is intended to be used with compose-cat.
 
 services:
   whoami:
@@ -24,10 +23,12 @@ services:
     container_name: cmp-redis
     command: ['redis-server', '--appendonly', 'yes']
     volumes:
-      - '${CMPCAT_STORE_DIR}/redis:/data'
+      - redis-data:/data
     profiles:
       - debug
 
 volumes:
   whoami-data:
     name: cmp-whoami-data
+  redis-data:
+    name: cmp-redis-data

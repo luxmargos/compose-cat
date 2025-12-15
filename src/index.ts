@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { execSync, spawn, spawnSync } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, rmSync, readdirSync, rmdirSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseDotenv, populate } from 'dotenv';
 import packageJson from '../package.json' with { type: 'json' };
@@ -29,10 +29,6 @@ function getDotenvPrefix(): string {
 // interpolation logic everywhere.
 function envKey(
   key:
-    | 'BASE_DIR'
-    | 'DATA_BASE_DIR'
-    | 'INJECT_DIR'
-    | 'STORE_DIR'
     | 'COMPOSE_BIN'
     | 'PROJECT_NAME'
     | 'DETECTED_COMPOSE_BIN'
@@ -156,34 +152,6 @@ function detectComposeBin(candidates: string[]): string | undefined {
     if (res.status === 0) return candidate;
   }
   return undefined;
-}
-
-/**
- * Guarantee the directories compose-cat expects (inject/store) exist and expose their absolute
- * paths through both the merged env and process.env for downstream commands.
- */
-function ensureDataDirs(env: StringMap): {
-  baseDir: string;
-  dataBaseDir: string;
-  injectDir: string;
-  storeDir: string;
-} {
-  const prefix = getPrefix();
-  const baseDir = env[envKey('BASE_DIR', prefix)] || '.';
-  const dataBaseDir = env[envKey('DATA_BASE_DIR', prefix)] || path.join(baseDir, 'container-data');
-  const injectDir = env[envKey('INJECT_DIR', prefix)] || path.join(dataBaseDir, 'inject');
-  const storeDir = env[envKey('STORE_DIR', prefix)] || path.join(dataBaseDir, 'store');
-
-  // Export to process.env for use by compose or other tools
-  setProcessEnv(envKey('BASE_DIR', prefix), baseDir);
-  setProcessEnv(envKey('DATA_BASE_DIR', prefix), dataBaseDir);
-  setProcessEnv(envKey('INJECT_DIR', prefix), injectDir);
-  setProcessEnv(envKey('STORE_DIR', prefix), storeDir);
-
-  mkdirSync(path.resolve(injectDir), { recursive: true });
-  mkdirSync(path.resolve(storeDir), { recursive: true });
-
-  return { baseDir, dataBaseDir, injectDir, storeDir };
 }
 
 // Thin wrapper around spawn that resolves with an exit code so hooks/compose invocations share the
@@ -399,14 +367,13 @@ async function runHooks(stage: HookStage, cmd: string | undefined, env: NodeJS.P
 }
 
 /**
- * Central orchestration step: resolve env files, profiles, directories, compose binary, hooks and
- * compose arguments so both the default and cmp-clean* commands behave consistently.
+ * Central orchestration step: resolve env files, profiles, compose binary, hooks and compose
+ * arguments so both the default and cmp-clean* commands behave consistently.
  */
 function prepare(composeArgs: string[], options: any) {
   // console.log('##########################');
   // execSync('env', { stdio: 'inherit' });
   const { envFiles, mergedEnv, profiles } = detectDotenvFilesAndEnv(options.profile, options);
-  const { storeDir } = ensureDataDirs(mergedEnv);
 
   prefixFromOptions = options.cmpPrefix as string | undefined;
   dotenvPrefixFromOptions = options.cmpDotenvPrefix as string | undefined;
@@ -452,7 +419,7 @@ function prepare(composeArgs: string[], options: any) {
   console.log('##########################');
   execSync('env', { stdio: 'inherit' });
 
-  return { composeBin, args, mergedEnv, storeDir, hooks };
+  return { composeBin, args, mergedEnv, hooks };
 }
 
 // Attach shared CLI options and the action callback to a commander Command instance. Every entry
@@ -494,7 +461,7 @@ async function main() {
   setupCommand(mainProgram, async (composeArgs: string[], options) => {
     const extracted = prepare(composeArgs, options);
     if (!extracted) return;
-    const { composeBin, args, mergedEnv, storeDir, hooks } = extracted;
+    const { composeBin, args, mergedEnv, hooks } = extracted;
 
     // Run pre-hooks
     let code = await runHooks('pre', undefined, mergedEnv);
@@ -520,11 +487,11 @@ async function main() {
 
   const cmpClean = program
     .command('cmp-clean')
-    .description('Stop services, remove containers/volumes, and clear compose-cat store data');
+    .description('Stop services, remove containers, and remove volumes');
   setupCommand(cmpClean, async (composeArgs: string[], options) => {
     const extracted = prepare(composeArgs, options);
     if (!extracted) return;
-    const { composeBin, args, mergedEnv, storeDir, hooks } = extracted;
+    const { composeBin, args, mergedEnv, hooks } = extracted;
 
     let code = await runHooks('pre', undefined, mergedEnv);
     if (code !== 0) return process.exit((process.exitCode = code));
@@ -547,14 +514,6 @@ async function main() {
     });
     if (code !== 0) return process.exit((process.exitCode = code));
 
-    // rm -rf ${CMP_STORE_DIR}
-    try {
-      rmSync(storeDir, { recursive: true, force: true });
-    } catch (e) {
-      // ignore
-      console.error('Error removing store dir:', e);
-    }
-
     // post hooks
     for (const h of hooks) {
       const postCode = await runHooks('post', h, mergedEnv);
@@ -573,7 +532,7 @@ async function main() {
   setupCommand(cmpCleanILocal, async (composeArgs: string[], options) => {
     const extracted = prepare(composeArgs, options);
     if (!extracted) return;
-    const { composeBin, args, mergedEnv, storeDir, hooks } = extracted;
+    const { composeBin, args, mergedEnv, hooks } = extracted;
 
     let code = await runHooks('pre', undefined, mergedEnv);
     if (code !== 0) return process.exit((process.exitCode = code));
@@ -597,13 +556,6 @@ async function main() {
     });
     if (code !== 0) return process.exit((process.exitCode = code));
 
-    // rm -rf ${CMP_STORE_DIR}
-    try {
-      rmSync(storeDir, { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
-
     // post hooks
     for (const h of hooks) {
       const postCode = await runHooks('post', h, mergedEnv);
@@ -623,7 +575,7 @@ async function main() {
   setupCommand(cmpCleanIAll, async (composeArgs: string[], options) => {
     const extracted = prepare(composeArgs, options);
     if (!extracted) return;
-    const { composeBin, args, mergedEnv, storeDir, hooks } = extracted;
+    const { composeBin, args, mergedEnv, hooks } = extracted;
 
     // pre hooks
     let code = await runHooks('pre', undefined, mergedEnv);
@@ -647,13 +599,6 @@ async function main() {
       // ...mergedEnv,
     });
     if (code !== 0) return process.exit((process.exitCode = code));
-
-    // rm -rf ${CMP_STORE_DIR}
-    try {
-      rmSync(storeDir, { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
 
     // post hooks
     for (const h of hooks) {

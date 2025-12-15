@@ -9,7 +9,6 @@ Use it exactly like your usual compose binary—just start with `compose-cat` in
 - **Compose binary auto-detection** – Probes `docker compose`, `podman compose`, `docker-compose`, and `podman-compose` (override or reorder via `--cmp-bin` or `CMPCAT_COMPOSE_BIN`).
 - **Dotenv layering & profiles** – Always loads `.env`, `.env.local`, and, when profiles are provided, `.env.<PROFILE>`/`.env.<PROFILE>.local` unless `--disable-profile-based-dotenv` is supplied.
 - **COMPOSE\_\* priming** – Values detected in dotenv files automatically populate `COMPOSE_*` variables (e.g., `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `COMPOSE_PROFILES`) before the compose command runs.
-- **Standardized data directories** – Expose reusable paths via `CMPCAT_DATA_BASE_DIR`, `CMPCAT_INJECT_DIR`, and `CMPCAT_STORE_DIR`.
 - **Cleanup helpers** – `cmp-clean`, `cmp-clean-i-local`, and `cmp-clean-i-all` encapsulate common teardown flows.
 - **Pluggable hooks** – Run pre/post scripts with per-command, per-platform, and per-binary variants to enforce custom workflows.
 
@@ -57,20 +56,17 @@ compose-cat down
 
 ## Commands
 
-- `cmp-clean`: Convenience cleanup. Removes containers and networks/volumes, then clears `${CMPCAT_STORE_DIR}` on the host.
+- `cmp-clean`: Convenience cleanup. Removes containers and networks/volumes.
   - `${CMPCAT_DETECTED_COMPOSE_BIN} rm -fsv`
   - `${CMPCAT_DETECTED_COMPOSE_BIN} down --volumes`
-  - `rm -rf ${CMPCAT_STORE_DIR}`
 
 - `cmp-clean-i-local`: Like `cmp-clean`, but also removes images referenced by services that do not have a custom tag.
   - `${CMPCAT_DETECTED_COMPOSE_BIN} rm -fsv`
   - `${CMPCAT_DETECTED_COMPOSE_BIN} down --rmi local --volumes`
-  - `rm -rf ${CMPCAT_STORE_DIR}`
 
 - `cmp-clean-i-all`: Like `cmp-clean`, but also removes every image referenced by the services.
   - `${CMPCAT_DETECTED_COMPOSE_BIN} rm -fsv`
   - `${CMPCAT_DETECTED_COMPOSE_BIN} down --rmi all --volumes`
-  - `rm -rf ${CMPCAT_STORE_DIR}`
 
 Caution:
 
@@ -91,7 +87,7 @@ Pass ComposeCat options (such as `--profile` or `-p`) immediately after the buil
 
 ## Special Flow for Cleanup Commands
 
-Cleanup commands follow the general flow, but expand to multiple compose commands executed in sequence (see “Commands” above for exact arguments). After the compose commands finish, ComposeCat removes `${CMPCAT_STORE_DIR}` on the host.
+Cleanup commands follow the general flow, but expand to multiple compose commands executed in sequence (see “Commands” above for exact arguments).
 
 ## ComposeCat Environment Variables (Consumed at Startup)
 
@@ -120,28 +116,6 @@ All variables in this section use the active prefix (default `CMPCAT_`).
   - `CMPCAT_COMPOSE_BIN=docker compose`
   - `CMPCAT_COMPOSE_BIN=podman compose`
   - `CMPCAT_COMPOSE_BIN=podman compose,docker compose`
-
-### `CMPCAT_BASE_DIR`
-
-- Base directory for project-relative operations.
-- Default: `.`
-
-### `CMPCAT_DATA_BASE_DIR`
-
-- Root directory under which ComposeCat ensures data directories exist.
-- Default: `${CMPCAT_BASE_DIR}/container-data`
-
-### `CMPCAT_INJECT_DIR`
-
-- Directory intended for files injected into containers (referenced from `compose.yml`).
-- Automatically created if missing.
-- Default: `${CMPCAT_DATA_BASE_DIR}/inject`
-
-### `CMPCAT_STORE_DIR`
-
-- Directory intended for files produced by containers (referenced from `compose.yml`).
-- Automatically created if missing.
-- Default: `${CMPCAT_DATA_BASE_DIR}/store`
 
 ## Environment Variables Set by ComposeCat
 
