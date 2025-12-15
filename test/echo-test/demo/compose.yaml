@@ -1,0 +1,46 @@
+name: demo
+
+include:
+  # Included compose is treated as its own sub-project.
+  # Relative paths inside demo/api/compose.yaml resolve relative to demo/api/ by default.
+  - path: ./api/compose.yaml
+
+services:
+  parent-print:
+    image: alpine:3.20
+    volumes:
+      - ./mount/parent.txt:/data/parent.txt:ro
+    command:
+      - sh
+      - -lc
+      - |
+        echo "[parent-print] PWD=$(pwd)";
+        echo "[parent-print] SOURCE=${SOURCE}";
+        echo "[parent-print] ONLY_IN_ROOT=${ONLY_IN_ROOT}";
+        echo "[parent-print] ONLY_IN_PROJECT=${ONLY_IN_PROJECT}";
+        echo "[parent-print] CHILD_MARK=${CHILD_MARK}";
+        echo "[parent-print] cat /data/parent.txt";
+        cat /data/parent.txt;
+        env;
+    depends_on:
+      - child-print
+      - child-write
+
+  parent-write:
+    image: alpine:3.20
+    volumes:
+      - ./write:/out
+    command:
+      - sh
+      - -lc
+      - |
+        echo "[parent-write] writing to /out/from-parent.txt";
+        date -Iseconds > /out/from-parent.txt;
+        echo "SOURCE=${SOURCE}" >> /out/from-parent.txt;
+        echo "ONLY_IN_ROOT=${ONLY_IN_ROOT}" >> /out/from-parent.txt;
+        echo "ONLY_IN_PROJECT=${ONLY_IN_PROJECT}" >> /out/from-parent.txt;
+        echo "CHILD_MARK=${CHILD_MARK}" >> /out/from-parent.txt;
+        echo "[parent-write] done";
+    depends_on:
+      - child-print
+      - child-write

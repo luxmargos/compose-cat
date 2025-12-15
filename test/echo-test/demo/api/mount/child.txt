@@ -1,0 +1,3 @@
+CHILD MOUNT OK
+This file is at: demo/api/mount/child.txt
+If you see this inside child-print container, included compose resolved ./mount relative to demo/api/

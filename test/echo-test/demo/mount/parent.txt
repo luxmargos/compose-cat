@@ -1,0 +1,3 @@
+PARENT MOUNT OK
+This file is at: demo/mount/parent.txt
+If you see this inside parent-print container, parent compose resolved ./mount relative to demo/
