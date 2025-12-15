@@ -518,7 +518,9 @@ async function main() {
     process.exitCode = postCode !== 0 ? postCode : code;
   });
 
-  const cmpClean = program.command('cmp-clean');
+  const cmpClean = program
+    .command('cmp-clean')
+    .description('Stop services, remove containers/volumes, and clear compose-cat store data');
   setupCommand(cmpClean, async (composeArgs: string[], options) => {
     const extracted = prepare(composeArgs, options);
     if (!extracted) return;
