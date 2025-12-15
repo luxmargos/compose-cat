@@ -169,7 +169,7 @@ function ensureDataDirs(env: StringMap): {
   storeDir: string;
 } {
   const prefix = getPrefix();
-  const baseDir = env[envKey('BASE_DIR', prefix)] || process.cwd();
+  const baseDir = env[envKey('BASE_DIR', prefix)] || '.';
   const dataBaseDir = env[envKey('DATA_BASE_DIR', prefix)] || path.join(baseDir, 'container-data');
   const injectDir = env[envKey('INJECT_DIR', prefix)] || path.join(dataBaseDir, 'inject');
   const storeDir = env[envKey('STORE_DIR', prefix)] || path.join(dataBaseDir, 'store');
@@ -447,10 +447,10 @@ function prepare(composeArgs: string[], options: any) {
     }
   }
 
-  // console.log('##########################');
-  // console.log(mergedEnv);
-  // console.log('##########################');
-  // execSync('env', { stdio: 'inherit' });
+  console.log('##########################');
+  console.log(mergedEnv);
+  console.log('##########################');
+  execSync('env', { stdio: 'inherit' });
 
   return { composeBin, args, mergedEnv, storeDir, hooks };
 }
