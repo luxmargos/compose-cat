@@ -1,0 +1,38 @@
+services:
+  child-print:
+    image: alpine:3.20
+    volumes:
+      - ./mount/child.txt:/data/child.txt:ro
+    command:
+      - sh
+      - -lc
+      - |
+        echo "[child-print] PWD=$(pwd)";
+        echo "[child-print] SOURCE=${SOURCE}";
+        echo "[child-print] ONLY_IN_ROOT=${ONLY_IN_ROOT}";
+        echo "[child-print] ONLY_IN_PROJECT=${ONLY_IN_PROJECT}";
+        echo "[child-print] CHILD_MARK=${CHILD_MARK}";
+        echo "[child-print] cat /data/child.txt";
+        cat /data/child.txt;
+        env;
+
+  child-write:
+    image: alpine:3.20
+    volumes:
+      - ./write:/out
+    command:
+      - sh
+      - -lc
+      - |
+        echo "[child-write] writing to /out/from-child.txt";
+        date -Iseconds > /out/from-child.txt;
+        echo "SOURCE=${SOURCE}" >> /out/from-child.txt;
+        echo "ONLY_IN_ROOT=${ONLY_IN_ROOT}" >> /out/from-child.txt;
+        echo "ONLY_IN_PROJECT=${ONLY_IN_PROJECT}" >> /out/from-child.txt;
+        echo "CHILD_MARK=${CHILD_MARK}" >> /out/from-child.txt;
+        echo "[child-write] done";
+
+  child-built:
+    build:
+      context: .
+      dockerfile: Dockerfile
