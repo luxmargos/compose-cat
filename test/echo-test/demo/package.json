@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "tsx ../../src/index.ts",
+    "test": "tsx ../../../src/index.ts",
     "up": "npm run test -- --profile=debug up -d",
     "down": "npm run test -- --profile=debug down",
     "clean": "npm run test -- cmp-clean --profile=debug",
@@ -14,7 +14,7 @@
   "license": "ISC",
   "description": "",
   "devDependencies": {
-    "compose-cat": "file:../..",
+    "compose-cat": "file:../../..",
     "tsx": "^4.20.5"
   }
 }
