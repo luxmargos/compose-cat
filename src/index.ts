@@ -51,7 +51,12 @@ function envKey(
 function mergeEnv(base: any, file: string): StringMap {
   try {
     const content = readFileSync(file, 'utf8');
-    populate(base, parseDotenv(content));
+    // console.log('##########################');
+    // console.log(content);
+    // console.log('before populate', base);
+    populate(base, parseDotenv(content), { override: true });
+    // console.log('after populate', base);
+    // console.log('##########################');
     return base;
   } catch {
     return {};
@@ -90,12 +95,12 @@ function detectDotenvFilesAndEnv(
   const baseDotenvFiles = [
     path.resolve(process.cwd(), `${dotenvPrefix}`),
     path.resolve(process.cwd(), `${dotenvPrefix}.local`),
-  ];
+  ].filter((f) => existsSync(f));
 
   // Load base files to possibly discover PROFILE from them as well.
   const baseMerged = JSON.parse(JSON.stringify(process.env ?? {})) as StringMap;
   for (const f of baseDotenvFiles) {
-    if (!existsSync(f)) continue;
+    console.log(`compose-cat: merging base dotenv file: ${f}`);
     mergeEnv(baseMerged, f);
   }
 
@@ -106,7 +111,7 @@ function detectDotenvFilesAndEnv(
     profiles = cliProfiles;
   }
 
-  const profileDotenvFiles: string[] = [];
+  let profileDotenvFiles: string[] = [];
 
   if (!options?.disableProfileBasedDotenv) {
     for (const p of profiles) {
@@ -117,10 +122,15 @@ function detectDotenvFilesAndEnv(
     }
   }
 
-  const allDotenvFiles = [...baseDotenvFiles, ...profileDotenvFiles].filter((f) => existsSync(f));
+  profileDotenvFiles = profileDotenvFiles.filter((f) => existsSync(f));
+
+  const allDotenvFiles = [...baseDotenvFiles, ...profileDotenvFiles];
 
   // Merge env in order; later files override earlier ones.
-  for (const f of allDotenvFiles) {
+  for (const f of profileDotenvFiles) {
+    // Base files may have already been merged above, but this keeps logging consistent with
+    // the authoritative merge order.
+    console.log(`compose-cat: merging profile dotenv file: ${f}`);
     mergeEnv(baseMerged, f);
   }
 
